@@ -157,3 +157,33 @@ test('repeated strokes keep building speed', () => {
   assert.ok(peak > 6, `top forward speed ${peak.toFixed(2)} m/s`);
   assert.ok(loco.head.z < z0 - 10, `went ${(z0 - loco.head.z).toFixed(1)} m forward`);
 });
+
+test('a 2x player stands twice as tall and keeps their feet when resizing', () => {
+  const loco = setup();
+  run(loco, 150, rest(), [false, false]);
+  const feet = loco.head.y - loco.cfg.bodyHeight;
+  loco.setScale(2, HEAD);
+  run(loco, 150, rest(), [false, false]);
+  assert.equal(loco.scale, 2);
+  assert.ok(Math.abs(loco.head.y - 2 * loco.cfg.bodyHeight) < 0.05, `head at ${loco.head.y}`);
+  assert.ok(Math.abs(loco.head.y - 2 * loco.cfg.bodyHeight - feet) < 0.05, 'feet still on the floor');
+  assert.ok(Math.abs(loco.head.x) < 0.01 && Math.abs(loco.head.z) < 0.01, 'did not slide sideways');
+  loco.setScale(0.5, HEAD);
+  run(loco, 150, rest(), [false, false]);
+  assert.ok(Math.abs(loco.head.y - 0.5 * loco.cfg.bodyHeight) < 0.05, `small head at ${loco.head.y}`);
+});
+
+test('more power means a faster launch from the same stroke', () => {
+  const launch = power => {
+    const loco = setup();
+    loco.power = power;
+    run(loco, 150);
+    for (let i = 0; i < 16; i++) {
+      const t = Math.min(i / 12, 1), y = i <= 12 ? -0.65 - 0.4 * t : -0.4, z = -0.5 + 0.7 * t;
+      loco.update(DT, HEAD, [V(-0.25, y, z).add(HEAD), V(0.25, y, z).add(HEAD)], [true, true]);
+    }
+    return loco.vel.length();
+  };
+  const normal = launch(1), strong = launch(2);
+  assert.ok(strong > normal * 1.5, `power 1: ${normal.toFixed(1)} m/s, power 2: ${strong.toFixed(1)} m/s`);
+});

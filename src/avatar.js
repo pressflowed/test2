@@ -6,10 +6,14 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const Y_FLIP = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
 
-// How the open skeleton hand sits on a controller grip: fingers point forward (grip -Z),
-// tilted down a little; palms roll from facing each other (0) toward facing down (PI/2).
-// If the palms face outward on the headset, flip palmSign.
-export const HAND_FIT = { fingerTilt: -0.45, palmRoll: 1.05, palmSign: 1, palmOffset: 0.08 };
+// How the open skeleton hand sits on a controller, in WebXR "grip space":
+//   -Z runs through the fist from little finger to thumb,
+//   +X is the way the left palm faces (and the back of the right hand),
+//   -Y is where straightened fingers point (along the forearm, away from you).
+// So the virtual palm faces wherever your real palm faces.
+// fingerTilt curls the fingers toward the palm a little (radians).
+export const HAND_FIT = { fingerTilt: 0.25, palmOffset: 0.08 };
+const FINGERS = new THREE.Vector3(0, -1, 0);
 
 export const BONE = 0xdcd1a8;
 
@@ -92,8 +96,9 @@ export class Avatar {
    * @param headQuat  world rotation of the headset/camera
    * @param hands     [{pos, quat}] world grip position and rotation, left then right
    */
-  update(headPos, headQuat, hands) {
+  update(headPos, headQuat, hands, scale = 1) {
     const [fwd, shoulder, wrist, d, elbow, pole] = this._v;
+    this.root.scale.setScalar(scale);
     // body faces where you look, but only turns around Y
     fwd.set(0, 0, -1).applyQuaternion(headQuat);
     const yaw = Math.atan2(-fwd.x, -fwd.z);
@@ -107,12 +112,13 @@ export class Avatar {
       const arm = this.arms[i], hnd = hands[i];
       // hand orientation from the controller, wrist set back from the palm
       arm.hand.quaternion.copy(hnd.quat).multiply(arm.handFit);
-      const fingers = d.set(0, 0, -1).applyQuaternion(hnd.quat);
-      wrist.copy(hnd.pos).addScaledVector(fingers, -HAND_FIT.palmOffset);
+      const fingers = d.copy(FINGERS).applyQuaternion(hnd.quat);
+      wrist.copy(hnd.pos).addScaledVector(fingers, -HAND_FIT.palmOffset * scale);
       arm.hand.position.copy(wrist);
+      arm.hand.scale.setScalar(scale); arm.upper.scale.setScalar(scale); arm.fore.scale.setScalar(scale);
 
       shoulder.copy(arm.shoulder).applyMatrix4(this.root.matrixWorld);
-      const a = arm.upperLen, b = arm.foreLen;
+      const a = arm.upperLen * scale, b = arm.foreLen * scale;
       d.subVectors(wrist, shoulder);
       let len = d.length();
       len = Math.min(Math.max(len, Math.abs(a - b) + 1e-3), a + b - 1e-4);
@@ -147,14 +153,33 @@ function fitHand(finger, palm, side) {
   const P = palm.clone().addScaledVector(F, -palm.dot(F)).normalize();
   const S = new THREE.Vector3().crossVectors(F, P);
   const restBasis = new THREE.Matrix4().makeBasis(F, P, S);
-  // in grip space: fingers forward (-Z) tilted down, palm toward the other hand
-  const tilt = HAND_FIT.fingerTilt;
-  const F2 = new THREE.Vector3(0, Math.sin(tilt), -Math.cos(tilt));
-  const roll = HAND_FIT.palmRoll;
-  const P2 = new THREE.Vector3(side * HAND_FIT.palmSign * Math.cos(roll), -Math.sin(roll), 0);
-  P2.addScaledVector(F2, -P2.dot(F2)).normalize();
+  // in grip space: the left palm faces +X, the right palm faces -X; fingers along -Y
+  const P0 = new THREE.Vector3(side, 0, 0);
+  const t = HAND_FIT.fingerTilt;
+  const F2 = FINGERS.clone().multiplyScalar(Math.cos(t)).addScaledVector(P0, Math.sin(t));
+  const P2 = P0.clone().multiplyScalar(Math.cos(t)).addScaledVector(FINGERS, -Math.sin(t));
   const S2 = new THREE.Vector3().crossVectors(F2, P2);
   const gripBasis = new THREE.Matrix4().makeBasis(F2, P2, S2);
   const m = gripBasis.multiply(restBasis.transpose());
   return new THREE.Quaternion().setFromRotationMatrix(m);
+}
+
+/** Where the fingertips are, for poking things: a point out along the fingers from the grip. */
+export function fingertip(handPos, handQuat, scale, out) {
+  return out.copy(FINGERS).applyQuaternion(handQuat).multiplyScalar(0.16 * scale).add(handPos);
+}
+
+/**
+ * A made-up grip rotation for mouse players, relative to the camera: fingers forward and a
+ * little down, palms facing the ground. `side` is +1 for the left hand, -1 for the right.
+ */
+export function restGrip(side) {
+  const t = 0.35;
+  const fingers = new THREE.Vector3(0, -Math.sin(t), -Math.cos(t));
+  const palm = new THREE.Vector3(side * 0.25, -Math.cos(t), Math.sin(t));
+  palm.addScaledVector(fingers, -palm.dot(fingers)).normalize();
+  const x = palm.clone().multiplyScalar(side);      // grip +X: left palm / back of right hand
+  const y = fingers.clone().negate();               // grip -Y is along the fingers
+  const z = new THREE.Vector3().crossVectors(x, y);
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
 }

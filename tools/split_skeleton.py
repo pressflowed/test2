@@ -98,9 +98,16 @@ for s in 'LR':
     elbow = (el + el2) / 2
     hp = hand[s][0]
     tip = hp[np.argmax(np.linalg.norm(hp - wr, axis=1))]
-    # palm normal: the hand's thinnest direction, pointed toward the body's midline (palms facing in)
+    # palm normal: the hand's thinnest direction. Which way round is decided by the thumb:
+    # looking at a left palm with the fingers up, the thumb is on the left (thumb = palm x fingers);
+    # a right hand is the mirror image.
     hc = hp.mean(axis=0); palm = np.linalg.svd(hp - hc, full_matrices=False)[2][2]
-    if (palm[0] > 0) == (s == 'L'): palm = -palm
+    fingers = (tip - wr) / np.linalg.norm(tip - wr)
+    palm = palm - fingers * palm.dot(fingers); palm /= np.linalg.norm(palm)
+    across = np.cross(palm, fingers)
+    w = (hp - wr) @ across; med = np.median(w)
+    thumb_side = 1 if (w.max() - med) > (med - w.min()) else -1   # the thumb sticks out furthest
+    if thumb_side != (1 if s == 'L' else -1): palm = -palm
     joints[s] = dict(shoulder=sh, elbow=elbow, wrist=wr, tip=tip, palm=palm)
 
 scale = ARM_LENGTH / np.mean([np.linalg.norm(j['elbow'] - j['shoulder']) + np.linalg.norm(j['wrist'] - j['elbow']) for j in joints.values()])

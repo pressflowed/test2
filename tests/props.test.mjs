@@ -108,3 +108,73 @@ test('a joined player sees the same props as the host', () => {
   client.applySnapshot(host.snapshot());
   assert.equal(client.props.size, 1);
 });
+
+test('a thrown seed flies, lands and grows into the real prop', () => {
+  const { props } = setup();
+  props.throwSeed('crate', V(0, 1.5, 0), V(0, 2, -5), 'h');
+  assert.equal(props.seeds.size, 1);
+  let frames = 0;
+  while (props.seeds.size && frames++ < 400) props.step(DT);
+  assert.equal(props.seeds.size, 0, 'seed landed');
+  const crate = [...props.props.values()].find(p => p.type.id === 'crate');
+  assert.ok(crate, 'crate appeared');
+  assert.ok(crate.mesh.position.z < -2, `landed down range at z ${crate.mesh.position.z}`);
+  assert.equal(crate.owner, 'h');
+  steps(props, 200);
+  assert.ok(Math.abs(crate.mesh.position.y - 0.275) < 0.03, `resting on the ground at y ${crate.mesh.position.y}`);
+  assert.ok(Math.abs(crate.mesh.scale.x - 1) < 1e-6, 'grown to full size');
+});
+
+test('a seed thrown at a wall puts the prop in front of it, not inside', () => {
+  const world = new World();
+  world.addBox(0, -1, 0, 40, 1, 40, 'grass');
+  world.addBox(0, 0, -5, 10, 6, 1, 'stone');   // wall face at z = -4.5
+  const props = new PropWorld(new THREE.Scene(), world.colliders, true);
+  props.throwSeed('bigcrate', V(0, 1.5, 0), V(0, 3, -12), 'h');
+  let frames = 0;
+  while (props.seeds.size && frames++ < 400) props.step(DT);
+  const crate = [...props.props.values()][0];
+  assert.ok(crate.mesh.position.z > -4.5 + 0.6 - 0.01, `crate centre z ${crate.mesh.position.z}`);
+});
+
+test('TNT explodes after its fuse and throws nearby props', () => {
+  const { props } = setup();
+  const crate = props.spawn('crate', V(1.2, 0.3, 0));
+  steps(props, 60);
+  props.spawn('tnt', V(0, 0.3, 0));
+  let boom = null;
+  for (let i = 0; i < 72 * 5 && !boom; i++) { props.step(DT); boom = props.events.find(e => e.type === 'boom'); }
+  assert.ok(boom, 'boom event');
+  assert.ok(![...props.props.values()].some(p => p.type.id === 'tnt'), 'TNT is gone');
+  steps(props, 20);
+  assert.ok(crate.mesh.position.x > 1.6 || crate.mesh.position.y > 0.8, `crate was thrown: ${crate.mesh.position.toArray()}`);
+});
+
+test('balloons float up; launch pads fling the player', () => {
+  const { world, props } = setup();
+  const b = props.spawn('balloon', V(0, 1, 0));
+  steps(props, 150);
+  assert.ok(b.mesh.position.y > 2, `balloon rose to ${b.mesh.position.y}`);
+
+  props.spawn('launchpad', V(6, 0.125, 0));
+  world.colliders = world.colliders.concat(props.colliders());
+  const loco = new Locomotion(world);
+  const head = V(0, 1.5, 0), hands = [V(-0.25, 0.85, -0.3), V(0.25, 0.85, -0.3)];
+  loco.teleport(V(6, 0.5, 0));
+  let peak = 0, padEvent = false;
+  for (let i = 0; i < 200; i++) {
+    loco.update(DT, head, hands, [false, false]);
+    if (loco.events.some(e => e.type === 'pad')) padEvent = true;
+    peak = Math.max(peak, loco.head.y);
+  }
+  assert.ok(padEvent, 'pad fired');
+  assert.ok(peak > 6, `launched to ${peak} m`);
+});
+
+test('fixed props stay square to the world so you stand where you see them', () => {
+  const { props } = setup();
+  const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.4, 0.7, 0.2));
+  const p = props.spawn('wall', V(0, 1, 0), q);
+  const size = p.col.max.clone().sub(p.col.min);
+  assert.ok(Math.abs(size.y - 2) < 1e-6 && Math.min(size.x, size.z) < 0.31, `wall box ${size.toArray()}`);
+});

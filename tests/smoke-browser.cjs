@@ -33,6 +33,11 @@ const server = http.createServer((req, res) => {
 
   // headless Chrome grants pointer lock and then drops it, which pauses the game: stub it out
   await page.addInitScript(() => { Element.prototype.requestPointerLock = () => Promise.resolve(); });
+  // wait in game seconds, so the test behaves the same however slowly this machine renders
+  const gameWait = async sec => {
+    const until = (await page.evaluate(() => game.time)) + sec;
+    await page.waitForFunction(t => game.time >= t, until, { timeout: 120000 });
+  };
   await page.goto(`http://localhost:${port}/`);
   await page.waitForFunction(() => window.game && window.game.avatar, null, { timeout: 30000 });
   await page.screenshot({ path: path.join(out, '1-menu.png') });
@@ -77,13 +82,19 @@ const server = http.createServer((req, res) => {
   // sandbox: rain props from the panel and build a little stack, then look at it
   await page.evaluate(() => {
     game.session.pressButton('rain');
-    const T = game.THREE;
-    game.session.selected = 8; // trampoline
-    game.session.spawnSelected(new T.Vector3(-2, 0.15, 1.5), new T.Quaternion());
-    game.session.selected = 5; // big crate
-    game.session.spawnSelected(new T.Vector3(1.5, 0.8, 1.5), new T.Quaternion());
+    const T = game.THREE, fwd = new T.Vector3(0, 0, -1);
+    game.session.select('trampoline');
+    game.session.spawnSelected(new T.Vector3(-2, 0.15, 1.5), fwd);
+    game.session.select('bigcrate');
+    game.session.spawnSelected(new T.Vector3(1.5, 0.8, 1.5), fwd);
+    // throw a mini launch pad and a TNT: they should grow where they land
+    game.session.throwItem('launchpad', new T.Vector3(0, 1.5, 8), new T.Vector3(0, 3, 3));
+    game.session.throwItem('tnt', new T.Vector3(0, 1.5, 3), new T.Vector3(3, 3, -5));
   });
-  await page.waitForTimeout(3500);
+  await gameWait(0.3);
+  const seeds = await page.evaluate(() => game.session.props.seeds.size);
+  if (seeds !== 2) errors.push(`expected 2 flying seeds, saw ${seeds}`);
+  await gameWait(3);
   const propCount = await page.evaluate(() => game.session.props.props.size);
   await page.evaluate(() => {
     const cam = new game.THREE.PerspectiveCamera(60, game.camera.aspect, 0.05, 200);
@@ -94,6 +105,57 @@ const server = http.createServer((req, res) => {
   await page.waitForTimeout(200);
   await page.screenshot({ path: path.join(out, '6-props.png') });
   if (propCount < 15) errors.push(`only ${propCount} props after the rain`);
+  const landed = await page.evaluate(() => [...game.session.props.props.values()].filter(p => p.type.id === 'launchpad').map(p => p.mesh.position.toArray()));
+  if (landed.length !== 1 || landed[0][1] > 0.3) errors.push(`launch pad did not land on the ground: ${JSON.stringify(landed)}`);
+
+  // TNT goes off after its fuse and is gone
+  await gameWait(2.5);
+  const tnt = await page.evaluate(() => [...game.session.props.props.values()].filter(p => p.type.id === 'tnt').length);
+  if (tnt !== 0) errors.push('TNT did not explode');
+
+  // arm menu: each tab, then size and power
+  await page.evaluate(() => { game.debugCamera = null; game.desktop.pitch = -0.1; });
+  for (const [tab, file] of [[0, '7-menu-items.png'], [1, '8-menu-player.png'], [2, '9-menu-world.png']]) {
+    await page.evaluate(t => { game.armMenu.tab = t; }, tab);
+    await page.waitForTimeout(250);
+    await page.screenshot({ path: path.join(out, file) });
+  }
+  // poke the menu the way a fingertip would: hover over the World tab, then touch it
+  const poke = await page.evaluate(() => {
+    const m = game.armMenu, T = game.THREE;
+    const pose = { pos: m.group.position.clone(), quat: m.group.quaternion.clone() };
+    const at = (px, py, z) => m.group.localToWorld(new T.Vector3((px / 840 - 0.5) * 0.28, (0.5 - py / 600) * 0.2, z));
+    const state = { selected: 'crate', size: 1, power: 1, gravity: 'Normal', sky: 'Day', room: 'Solo', players: 1, calib: 0 };
+    m.tab = 0; m.page = 0;
+    const hoverOnly = m.update(0.016, pose, 1, at(700, 44, 0.07), state);
+    const hovered = m.hover;
+    const touched = m.update(0.016, pose, 1, at(700, 44, 0.01), state);
+    const tabAfter = m.tab;
+    m.tab = 0;
+    m.update(0.5, pose, 1, null, state);
+    const item = m.itemAt(at(320, 190, 0.03));          // second slot on the first page
+    const offPanel = m.itemAt(at(320, 190, 0.3));
+    return { hoverOnly, hovered, touched, tabAfter, item, offPanel };
+  });
+  if (poke.hoverOnly.length || poke.hovered !== 'tab:2' || poke.touched[0] !== 'tab:2' || poke.tabAfter !== 2 || poke.item !== 'ball' || poke.offPanel !== null)
+    errors.push(`arm menu poke failed: ${JSON.stringify(poke)}`);
+
+  const sized = await page.evaluate(async () => {
+    game.menuAction('size+'); game.menuAction('size+');   // 1 -> 1.5 -> 2
+    game.menuAction('power+');
+    const t0 = game.time;
+    await new Promise(r => { const tick = () => (game.time > t0 + 1.2 ? r() : setTimeout(tick, 50)); tick(); });
+    return { scale: game.loco.scale, power: game.loco.power, headY: game.loco.head.y, rig: game.camera.parent.scale.x };
+  });
+  if (sized.scale !== 2 || sized.rig !== 2 || sized.power !== 1.5) errors.push(`size/power not applied: ${JSON.stringify(sized)}`);
+  if (Math.abs(sized.headY - 1.6) > 0.25) errors.push(`a 2x player should stand about 1.6 m tall, head at ${sized.headY}`);
+  await page.evaluate(() => { game.menuAction('sky'); });
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(out, '10-giant-sunset.png') });
+  await page.evaluate(() => { game.menuAction('size-'); game.menuAction('size-'); game.menuAction('power-'); game.session.pressButton('sky'); });
+  await page.waitForTimeout(700);
+  await page.evaluate(() => { game.session.pressButton('sky'); });   // night -> back to day
+  await page.waitForTimeout(700);
 
   // bird's-eye view of the whole map
   await page.evaluate(() => {

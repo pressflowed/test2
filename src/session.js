@@ -10,7 +10,11 @@ import { PropWorld, PROP_TYPES, TYPE } from './props.js';
 import { Avatar } from './avatar.js';
 
 const SEND_EVERY = 0.05;     // 20 Hz
-const LOW_GRAVITY = -3.6, NORMAL_GRAVITY = -9.8;
+const STATE_LEN = 22;        // head pos+quat (7), two hands pos+quat (14), size (1)
+export const GRAVITY = { normal: -9.8, low: -3.2, high: -19 };
+export const GRAVITY_LABEL = { normal: 'Normal', low: 'Low', high: 'Heavy' };
+const GRAVITY_ORDER = ['normal', 'low', 'high'];
+const SKY_ORDER = ['day', 'sunset', 'night'];
 
 export class Session {
   /**
@@ -25,7 +29,7 @@ export class Session {
     this.net = net;
     this.loco = loco;
     this.me = me;
-    this.settings = { lowGravity: false };
+    this.settings = { gravity: 'normal', sky: 'day' };
     this.players = new Map();   // id -> { name, color, state: Float32 array, avatar, cur }
     this.template = null;
     avatarTemplate.then(t => { this.template = t; for (const p of this.players.values()) this._ensureAvatar(p); });
@@ -34,6 +38,8 @@ export class Session {
     this.selected = 0;          // index into PROP_TYPES
     this.onChange = () => {};   // roster / room / settings changed
     this.onButton = () => {};   // (buttonId, on) for panel lights
+    this.onBoom = () => {};     // (THREE.Vector3) an explosion went off
+    this.onSettings = () => {}; // (settings) gravity or sky changed
     this._sendT = 0;
     this._buttonT = {};
 
@@ -86,7 +92,7 @@ export class Session {
     for (const h of this.props.hands.values()) this.props.world.removeBody(h);
     this.props = new PropWorld(this.scene, this.levelColliders, simulate);
     this.held = [null, null];
-    this._applySettings({ lowGravity: false });
+    this._applySettings({ gravity: 'normal', sky: 'day' });
   }
 
   _dropPlayer(id) {
@@ -138,7 +144,7 @@ export class Session {
         this._ensureAvatar(p);
         if (p.avatar) { p.avatar.setName(p.name); p.avatar.setColor(p.color); }
         this._broadcastRoster();
-      } else if (msg.t === 'state' && Array.isArray(msg.s) && msg.s.length === 21) {
+      } else if (msg.t === 'state' && Array.isArray(msg.s) && msg.s.length === STATE_LEN) {
         p.state = msg.s;
       } else {
         this._handleRequest(from, msg);
@@ -151,7 +157,7 @@ export class Session {
           const p = this.players.get(id);
           if (p) p.state = s;
         }
-        this.props.applySnapshot(msg.props);
+        this.props.applySnapshot(msg);
         // drop holds the host didn't confirm
         for (let i = 0; i < 2; i++) {
           const id = this.held[i];
@@ -159,7 +165,9 @@ export class Session {
           const pr = this.props.props.get(id);
           if (!pr || (pr.heldKey && pr.heldKey !== `${this.myId}:${i}`)) this.held[i] = null;
         }
-        if (msg.settings && msg.settings.lowGravity !== this.settings.lowGravity) this._applySettings(msg.settings);
+        if (msg.settings && (msg.settings.gravity !== this.settings.gravity || msg.settings.sky !== this.settings.sky)) this._applySettings(msg.settings);
+      } else if (msg.t === 'boom' && Array.isArray(msg.pos)) {
+        this.onBoom(new THREE.Vector3().fromArray(msg.pos));
       }
     }
   }
@@ -177,6 +185,13 @@ export class Session {
         if (!TYPE[msg.type] || !Array.isArray(msg.pos)) return;
         const q = Array.isArray(msg.quat) ? new THREE.Quaternion().fromArray(msg.quat) : null;
         props.spawn(msg.type, new THREE.Vector3().fromArray(msg.pos), q, { owner: from });
+        break;
+      }
+      case 'throw': {
+        if (!TYPE[msg.type] || !Array.isArray(msg.pos) || !Array.isArray(msg.vel)) return;
+        const vel = new THREE.Vector3().fromArray(msg.vel);
+        if (vel.length() > 30) vel.setLength(30);
+        props.throwSeed(msg.type, new THREE.Vector3().fromArray(msg.pos), vel, from);
         break;
       }
       case 'del': props.remove(msg.id); break;
@@ -197,28 +212,34 @@ export class Session {
 
   _pressButton(id) {
     const now = performance.now();
-    if (now - (this._buttonT[id] || 0) < 600) return;
+    if (now - (this._buttonT[id] || 0) < 500) return;
     this._buttonT[id] = now;
-    if (id === 'lowgrav') this._applySettings({ ...this.settings, lowGravity: !this.settings.lowGravity });
+    const cycle = (order, cur) => order[(order.indexOf(cur) + 1) % order.length];
+    if (id === 'lowgrav') this._applySettings({ ...this.settings, gravity: this.settings.gravity === 'low' ? 'normal' : 'low' });
+    else if (id === 'gravity') this._applySettings({ ...this.settings, gravity: cycle(GRAVITY_ORDER, this.settings.gravity) });
+    else if (id === 'sky') this._applySettings({ ...this.settings, sky: cycle(SKY_ORDER, this.settings.sky) });
     else if (id === 'clear') this.props.clear();
-    else if (id === 'rain') {
-      const kinds = PROP_TYPES.filter(t => !t.fixed);
-      for (let i = 0; i < 16; i++) {
+    else if (id === 'rain' || id === 'balloons') {
+      const kinds = id === 'balloons' ? [TYPE.balloon] : PROP_TYPES.filter(t => !t.fixed && !t.fuse && !t.float && t.mass < 100);
+      const c = this._local ? this._local.head.pos : new THREE.Vector3();
+      for (let i = 0; i < (id === 'balloons' ? 12 : 16); i++) {
         const t = kinds[Math.floor(Math.random() * kinds.length)];
-        const a = Math.random() * Math.PI * 2, r = 1 + Math.random() * 6;
+        const a = Math.random() * Math.PI * 2, r = 1.5 + Math.random() * 5;
         const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.random() * 3, Math.random() * 3, 0));
-        this.props.spawn(t.id, new THREE.Vector3(Math.cos(a) * r, 8 + Math.random() * 6, -2 + Math.sin(a) * r), q, { owner: 'rain' });
+        const y = id === 'balloons' ? 0.5 + Math.random() * 1.5 : 8 + Math.random() * 6;
+        this.props.spawn(t.id, new THREE.Vector3(c.x + Math.cos(a) * r, c.y + y, c.z + Math.sin(a) * r), q, { owner: id });
       }
     }
-    this.onButton(id, id === 'lowgrav' ? this.settings.lowGravity : true);
+    this.onButton(id, id === 'lowgrav' ? this.settings.gravity === 'low' : true);
   }
 
   _applySettings(s) {
-    this.settings = { ...s };
-    const g = s.lowGravity ? LOW_GRAVITY : NORMAL_GRAVITY;
+    this.settings = { gravity: GRAVITY[s.gravity] ? s.gravity : 'normal', sky: SKY_ORDER.includes(s.sky) ? s.sky : 'day' };
+    const g = GRAVITY[this.settings.gravity];
     this.loco.cfg.gravity = g;
     this.props.setGravity(g);
-    this.onButton('lowgrav', s.lowGravity);
+    this.onButton('lowgrav', this.settings.gravity === 'low');
+    this.onSettings(this.settings);
     this.onChange();
   }
 
@@ -232,29 +253,36 @@ export class Session {
   }
 
   // ---- local player actions
-  spawnSelected(handPos, handQuat) {
-    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(handQuat);
+  select(typeId) { const i = PROP_TYPES.findIndex(t => t.id === typeId); if (i >= 0) this.selected = i; }
+
+  /** Spawn the selected item right in front of a hand (dir = which way the fingers point). */
+  spawnSelected(handPos, dir, scale = 1) {
     const t = this.selectedType;
     const reach = t.shape === 'sphere' ? t.r : Math.max(...(t.size || [t.r * 2, t.h, t.r * 2])) / 2;
-    const pos = handPos.clone().addScaledVector(fwd, 0.25 + reach);
+    const pos = handPos.clone().addScaledVector(dir, 0.25 * scale + reach);
     if (!t.fixed) pos.y += 0.1;
-    // fixed props spawn level; others keep the hand's twist
-    const yaw = Math.atan2(-fwd.x, -fwd.z);
+    const yaw = Math.atan2(-dir.x, -dir.z);
     const quat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
     this.request({ t: 'spawn', type: t.id, pos: pos.toArray(), quat: quat.toArray() });
   }
 
-  deleteNear(handPos) {
-    const p = this.props.nearest(handPos, 0.3);
+  /** Throw a mini item; it grows to full size where it lands. */
+  throwItem(typeId, pos, vel) {
+    const r = v => Math.round(v * 1000) / 1000;
+    this.request({ t: 'throw', type: typeId, pos: pos.toArray().map(r), vel: vel.toArray().map(r) });
+  }
+
+  deleteNear(handPos, scale = 1) {
+    const p = this.props.nearest(handPos, 0.3 * scale);
     if (p) this.request({ t: 'del', id: p.id });
     return !!p;
   }
 
   undo() { this.request({ t: 'undo' }); }
 
-  grab(i, handPos) {
+  grab(i, handPos, scale = 1) {
     if (this.held[i] != null) return false;
-    const p = this.props.nearest(handPos, 0.18, pr => !pr.held && !pr.heldKey);
+    const p = this.props.nearest(handPos, 0.18 * scale, pr => !pr.held && !pr.heldKey);
     if (!p) return false;
     this.held[i] = p.id;
     this.request({ t: 'grab', id: p.id, hand: i });
@@ -270,6 +298,16 @@ export class Session {
 
   pressButton(id) { this.request({ t: 'button', id }); }
 
+  /** Blob-shadow casters for the other players. */
+  playerCasters(out) {
+    for (const p of this.players.values()) {
+      if (!p.cur) continue;
+      const sc = p.cur[21] || 1;
+      out.push({ x: p.cur[0], y: p.cur[1] - 0.8 * sc, z: p.cur[2], r: 0.36 * sc });
+    }
+    return out;
+  }
+
   /** Climbable props as boxes for the local movement code (not the ones I'm holding). */
   propColliders() { return this.props.colliders(`${this.myId}:`); }
 
@@ -284,15 +322,16 @@ export class Session {
 
     if (this.isAuthority) {
       // everyone's hands and bodies knock light props around
-      const bodies = [[this.myId, local.head.pos, local.hands]];
+      const bodies = [[this.myId, local.head.pos, local.hands, local.scale || 1]];
       for (const p of this.players.values()) {
         if (!p.state) continue;
         const s = p.state;
-        bodies.push([p.id, new THREE.Vector3(s[0], s[1], s[2]), [0, 1].map(i => this._handPose(p.id, i))]);
+        bodies.push([p.id, new THREE.Vector3(s[0], s[1], s[2]), [0, 1].map(i => this._handPose(p.id, i)), s[21] || 1]);
       }
-      for (const [id, head, hands] of bodies) {
-        hands.forEach((h, i) => { if (h) props.setHand(`${id}:${i}`, h.pos, 0.08, dt); });
-        props.setHand(`${id}:body`, tmpP.copy(head).y -= 0.45, 0.28, dt);
+      for (const [id, head, hands, sc] of bodies) {
+        hands.forEach((h, i) => { if (h) props.setHand(`${id}:${i}`, h.pos, 0.08 * sc, dt); });
+        tmpP.copy(head); tmpP.y -= 0.45 * sc;
+        props.setHand(`${id}:body`, tmpP, 0.28 * sc, dt);
       }
       props.pruneHands();
       // held props follow their hands
@@ -305,6 +344,12 @@ export class Session {
         props.moveHeld(p, tmpP, tmpQ, dt);
       }
       props.step(dt);
+      for (const e of props.events) {
+        if (e.type !== 'boom') continue;
+        if (this.net.role === 'host') this.net.broadcast({ t: 'boom', pos: e.pos });
+        this.onBoom(new THREE.Vector3().fromArray(e.pos));
+      }
+      props.events.length = 0;
     } else {
       props.interpolate(dt);
       // draw what I'm holding at my own hand, without waiting for the host
@@ -326,12 +371,12 @@ export class Session {
     for (const p of this.players.values()) {
       if (!p.state || !p.avatar) continue;
       if (!p.cur) p.cur = p.state.slice();
-      for (let k = 0; k < 21; k++) p.cur[k] += (p.state[k] - p.cur[k]) * a;
+      for (let k = 0; k < STATE_LEN; k++) p.cur[k] += (p.state[k] - p.cur[k]) * a;
       const c = p.cur;
       const head = { pos: new THREE.Vector3(c[0], c[1], c[2]), quat: new THREE.Quaternion(c[3], c[4], c[5], c[6]).normalize() };
       const hands = [0, 1].map(i => { const o = 7 + i * 7; return { pos: new THREE.Vector3(c[o], c[o + 1], c[o + 2]), quat: new THREE.Quaternion(c[o + 3], c[o + 4], c[o + 5], c[o + 6]).normalize() }; });
       p.avatar.root.visible = true;
-      p.avatar.update(head.pos, head.quat, hands);
+      p.avatar.update(head.pos, head.quat, hands, c[21] || 1);
     }
 
     // network send
@@ -342,7 +387,7 @@ export class Session {
       if (this.net.role === 'host') {
         const players = [['h', ...mine]];
         for (const p of this.players.values()) if (p.state) players.push([p.id, ...p.state]);
-        this.net.broadcast({ t: 'snap', players, props: props.snapshot(), settings: this.settings });
+        this.net.broadcast({ t: 'snap', players, ...props.snapshot(), settings: this.settings });
       } else {
         this.net.send({ t: 'state', s: mine });
       }
@@ -354,5 +399,6 @@ function packState(local) {
   const r = v => Math.round(v * 1000) / 1000;
   const out = [...local.head.pos.toArray(), ...local.head.quat.toArray()];
   for (const h of local.hands) out.push(...h.pos.toArray(), ...h.quat.toArray());
+  out.push(local.scale || 1);
   return out.map(r);
 }

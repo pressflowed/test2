@@ -2,7 +2,7 @@
 
 A VR tag game where you have no legs: you move by pushing off the world with your hands. It's built with WebXR and Three.js and made for Meta Quest. See [PLAN.md](PLAN.md) for the roadmap.
 
-**Current state: sandbox with physics props and multiplayer.**
+**Current state: sandbox with an arm menu, physics props and multiplayer.**
 
 **Play:** https://pressflowed.github.io/test2/ (open it in the Meta Quest Browser and press Enter VR, or play on desktop)
 
@@ -24,16 +24,21 @@ It connects you directly (WebRTC through PeerJS's free public server), so there'
 
 ### In VR
 - **Move:** push the ground down and back. Fast strokes, then let go, to leap. Push down on walls to climb.
-- **Right hand:** trigger spawns the item shown above your left hand. **A** picks the next item, **B** undoes your last spawn, the stick snap-turns.
-- **Left hand:** trigger deletes the prop nearest that hand. **X** calibrates your height (stand tall, arms relaxed), **Y** takes you back to the start.
+- **Arm menu:** a panel floats above your left hand. Poke its tabs and buttons with your right fingertip. **X** hides or shows it.
+  - **Items:** small 3D previews of everything you can spawn. Reach into one with your right hand, squeeze **grip** to pull it out, and throw it. It grows to full size where it lands.
+  - **Player:** your size (0.5x to 3x) and power (0.5x to 3x), height calibration, back to start.
+  - **World:** gravity (normal, low, heavy), sky (day, sunset, night), prop rain, balloons, undo, clear props.
+- **Right hand:** trigger quick-spawns the selected item at your hand. **A** picks the next item, **B** undoes your last spawn, the stick snap-turns.
+- **Left hand:** trigger deletes the prop nearest that hand. **Y** takes you back to the start.
 - **Grip (either hand):** grab a prop; let go to throw it.
 - **Control panel** by the start: slap the buttons for low gravity, clearing props, or prop rain.
 
-Items: crate, ball, beach ball, barrel, cone, big crate, plank, platform (floats where you put it), trampoline.
+Items: crate, ball, beach ball, barrel, cone, big crate, plank, platform, trampoline, TNT (explodes after 4 seconds), balloon (floats away), launch pad (flings you up), super ball, giant ball, domino, bowling pin, dice, tire, anvil, and building pieces that stay where you put them (block, wall, pillar, beam).
 
 ### On desktop (for testing without a headset)
 - Hold **left / right click** and drag the mouse down to push with that hand. **Space** uses both hands.
-- **1–9** or the mouse wheel pick an item, **F** spawns it, **G** (hold) grabs with the right hand, **X** deletes near it, **Z** undoes.
+- **F** throws the selected item where you look. The wheel or **1–8** pick an item; **,** and **.** change page. **V** quick-spawns, **G** (hold) grabs with the right hand, **X** deletes near it, **Z** undoes.
+- **M** shows or hides the menu, **T** switches tab, **[ ]** change size, **- =** change power, **L** gravity, **N** sky, **P** prop rain, **B** balloons, **C** clear.
 - The mouse looks around. **Q / E** turn, **R** resets, **Esc** pauses.
 
 ## Develop
@@ -52,12 +57,15 @@ npm run serve          # http://localhost:8000 for desktop testing
 |---|---|
 | `src/locomotion.js` | The arm-push movement. All the feel settings are in `DEFAULTS` at the top. |
 | `src/physics.js` | Box collision world |
-| `src/avatar.js` | Skeleton body: head follows the headset, IK arms, hand fit (`HAND_FIT`) |
+| `src/avatar.js` | Skeleton body: head follows the headset, IK arms, how the hand sits on the controller (`HAND_FIT`) |
 | `src/input-vr.js` / `src/input-desktop.js` | Headset + controllers / mouse + keyboard |
 | `src/props.js` | Physics props (cannon-es): types, spawning, grabbing, syncing |
 | `src/session.js` | Solo and multiplayer play: rooms, other players, requests, control panel |
 | `src/net.js` | PeerJS host / join with room codes |
-| `src/hud.js` | The display above your left hand |
+| `src/armmenu.js` | The arm menu: tabs, buttons you poke, item previews you grab |
+| `src/textures.js` | All textures, painted on canvases at startup (no image files) |
+| `src/sky.js` | Sky dome, sun, clouds, stars; day, sunset and night |
+| `src/fx.js` | Blob shadows and explosion flashes |
 | `src/sandbox.js` | The 70 x 70 m test map (`MAP` sets its size) and its info board |
 | `assets/skeleton-rig.glb` | The player model, made from `assets/skeleton.glb` by `tools/split_skeleton.py` |
 | `prototype/desktop.html` | The first desktop-only prototype, with the forest arena, bots and infection tag (used in Phase 2) |

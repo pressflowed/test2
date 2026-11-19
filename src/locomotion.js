@@ -39,7 +39,10 @@ export const DEFAULTS = {
 export class Locomotion {
   constructor(world, opts = {}) {
     this.world = world;
-    this.cfg = { ...DEFAULTS, ...opts };
+    this.cfg = { ...DEFAULTS, ...opts };   // base settings, for a normal-sized player
+    this.scale = 1;                        // player size: 2 = twice as big
+    this.power = 1;                        // multiplies launch boost and top speed
+    this.c = { ...this.cfg };              // settings in effect (scaled), refreshed every update
     this.origin = new THREE.Vector3();
     this.yaw = 0;
     this.vel = new THREE.Vector3();
@@ -68,7 +71,31 @@ export class Locomotion {
   }
 
   toWorld(local, out) {
-    return out.copy(local).applyAxisAngle(UP, this.yaw).add(this.origin);
+    return out.copy(local).multiplyScalar(this.scale).applyAxisAngle(UP, this.yaw).add(this.origin);
+  }
+
+  // The settings in effect for the current size and power.
+  _refresh() {
+    const b = this.cfg, e = this.c, s = this.scale, p = this.power;
+    Object.assign(e, b);
+    for (const k of ['bodyHeight', 'headR', 'bodyR', 'handR', 'maxReach', 'stickTol', 'maxPush', 'multThreshold']) e[k] = b[k] * s;
+    e.jumpMult = b.jumpMult * p;
+    e.maxJump = b.maxJump * p * s;
+    e.maxSpeed = b.maxSpeed * p * s;
+    return e;
+  }
+
+  /** Change the player's size, keeping their feet where they are. */
+  setScale(scale, headLocal) {
+    const head = this.toWorld(headLocal, this._tmp);
+    const feetY = head.y - this.cfg.bodyHeight * this.scale;
+    this.scale = scale;
+    this._refresh();
+    const offset = this._tmp2.copy(headLocal).multiplyScalar(scale).applyAxisAngle(UP, this.yaw);
+    this.origin.set(head.x - offset.x, feetY + this.cfg.bodyHeight * scale + 0.02 - offset.y, head.z - offset.z);
+    this.history.length = 0;
+    this.touching = false;
+    for (const h of this.hands) { h.pinned = false; h.ready = false; }
   }
 
   /** Put the rig at `pos` (rig origin, i.e. the floor under the play space centre). */
@@ -85,13 +112,13 @@ export class Locomotion {
   turn(angle, headLocal) {
     const head = this.toWorld(headLocal, this._tmp);
     this.yaw += angle;
-    const offset = this._tmp2.copy(headLocal).applyAxisAngle(UP, this.yaw);
+    const offset = this._tmp2.copy(headLocal).multiplyScalar(this.scale).applyAxisAngle(UP, this.yaw);
     this.origin.copy(head).sub(offset);
     for (const h of this.hands) { h.pinned = false; h.ready = false; }
   }
 
   _bodySpheres() {
-    const c = this.cfg;
+    const c = this.c;
     return [
       [0, c.headR],
       [-(c.bodyHeight - c.bodyR) * 0.5, c.bodyR],
@@ -120,7 +147,11 @@ export class Locomotion {
               this.vel.addScaledVector(this._n, -vn * (1 + bounce));
             }
           }
-          if (this._n.y > 0.6) { this.grounded = true; this.groundKind = col.kind; }
+          if (this._n.y > 0.6) {
+            this.grounded = true; this.groundKind = col.kind;
+            // launch pads fling you straight up
+            if (fixVel && col.launch && this.vel.y < col.launch) { this.vel.y = col.launch; this.events.push({ type: 'pad', col }); }
+          }
         }
       }
       if (!moved) break;
@@ -133,11 +164,11 @@ export class Locomotion {
 
   // Sweep a hand from where it was to its target; stop at the first surface.
   _sweep(h) {
-    const r = this.cfg.handR;
+    const r = this.c.handR;
     const from = this._tmp.copy(h.pos);
     let len = from.distanceTo(h.target);
-    if (len > 1.5) { from.copy(this.head); len = from.distanceTo(h.target); }
-    const steps = Math.max(1, Math.ceil(len / 0.025));
+    if (len > 1.5 * this.scale) { from.copy(this.head); len = from.distanceTo(h.target); }
+    const steps = Math.max(1, Math.ceil(len / (0.025 * this.scale)));
     const q = this._tmp2;
     for (let i = 1; i <= steps; i++) {
       q.lerpVectors(from, h.target, i / steps);
@@ -179,14 +210,14 @@ export class Locomotion {
    * @param handActive  [left, right] whether each hand can touch things
    */
   update(dt, headLocal, handLocals, handActive = [true, true]) {
-    const c = this.cfg;
+    const c = this._refresh();
     this.events.length = 0;
     this._start.copy(this.origin);
 
     // 1. free motion under gravity (momentum carries through hand contacts)
     this._v0.copy(this.vel);
     this.grounded = false;
-    const steps = Math.min(8, Math.max(1, Math.ceil(this.vel.length() * dt / 0.08)));
+    const steps = Math.min(8, Math.max(1, Math.ceil(this.vel.length() * dt / (0.08 * this.scale))));
     const sdt = dt / steps;
     for (let i = 0; i < steps; i++) {
       this.vel.y = Math.max(this.vel.y + c.gravity * sdt, -30);

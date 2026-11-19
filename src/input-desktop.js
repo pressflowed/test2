@@ -2,6 +2,7 @@
 // Mouse looks around. Hold left/right click to take control of that hand and move the
 // mouse to swing it; hold Space for both hands. Q/E or arrow keys turn.
 import * as THREE from 'three';
+import { restGrip } from './avatar.js';
 
 const ARM = 0.95, DEPTH = 0.85, HAND_SENS = 0.0027, LOOK_SENS = 0.0022;
 
@@ -13,6 +14,7 @@ export class DesktopInput {
     this.headLocal = new THREE.Vector3(0, 1.5, 0);
     this.headQuat = new THREE.Quaternion();
     this.hands = [-1, 1].map(side => ({
+      grip: restGrip(-side),
       rest: new THREE.Vector2(0.27 * side, -0.25), off: new THREE.Vector2(0.27 * side, -0.25), held: 0, spent: false,
       local: new THREE.Vector3(), quat: new THREE.Quaternion(),
     }));
@@ -103,7 +105,7 @@ export class DesktopInput {
       const r = h.off.length();
       const z = Math.sqrt(Math.max(ARM * ARM - r * r, 0)) * DEPTH;
       h.local.set(h.off.x, h.off.y, -z).applyQuaternion(this.headQuat).add(this.headLocal);
-      h.quat.copy(this.headQuat);
+      h.quat.copy(this.headQuat).multiply(h.grip);
     }
   }
 }

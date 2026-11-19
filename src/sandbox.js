@@ -1,9 +1,11 @@
-// Phase 1 test map: things to run on, jump between and climb.
+// The sandbox map: things to run on, jump between and climb.
 import * as THREE from 'three';
+import { texture } from './textures.js';
 
-const COLORS = {
-  grass: 0x5f8f3a, 'grass-dark': 0x4f7d32, wood: 0x8a5e36, plank: 0xb98a52, rock: 0x8e948c, stone: 0x66706a,
-  leaf: 0x3d8a3f, crate: 0xc08a4c, metal: 0x9aa7b0,
+// Per surface: tint over its texture, and how many metres one repeat of the texture covers.
+const SURFACE = {
+  grass: [0xffffff, 2.2], 'grass-dark': [0xc4dcb6, 2.2], wood: [0xffffff, 1.6], plank: [0xffffff, 1.5],
+  rock: [0xffffff, 3], stone: [0xffffff, 2.4], leaf: [0xffffff, 2], crate: [0xffffff, 1.2], metal: [0xffffff, 1],
 };
 
 // The map is a square MAP metres on a side (70 m: about 12x the area of the first 20 m room).
@@ -95,8 +97,9 @@ export function buildSandbox(scene, world) {
     box(x, 0, -half + 1.5, 3, 3 + ((i * 5) % 7), 2 + (i % 3) * 0.6, 'rock');
   }
 
-  scene.add(mergeBoxes(boxes));
-  scene.add(gridFloor(MAP));
+  for (const mesh of mergeBoxes(boxes)) scene.add(mesh);
+  scene.add(grassFloor(MAP));
+  scene.add(grassTufts(MAP, world.colliders));
 
   // ---- control panel near the start: slap the buttons on top
   box(3.2, 0, 4.6, 0.6, 0.45, 2.6, 'stone');
@@ -153,48 +156,82 @@ function makePanelLabels() {
   return new THREE.Mesh(new THREE.PlaneGeometry(2.6, 0.65), new THREE.MeshBasicMaterial({ map: tex }));
 }
 
-// One mesh for all level boxes, coloured per surface, so the headset draws it in one call.
+// One mesh per surface type, so the headset draws the whole level in a handful of calls.
+// Texture coordinates come from world positions, so textures keep the same scale on every box.
 function mergeBoxes(list) {
-  const pos = [], nrm = [], col = [];
+  const groups = {};
   const c = new THREE.Color();
   let seed = 1;
   const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
   for (const b of list) {
+    const grp = groups[b.kind] || (groups[b.kind] = { pos: [], nrm: [], col: [], uv: [] });
+    const [tint, tile] = SURFACE[b.kind] || [0x888888, 2];
     const g = new THREE.BoxGeometry(b.w, b.h, b.d).toNonIndexed();
     g.translate(b.cx, b.by + b.h / 2, b.cz);
-    c.setHex(COLORS[b.kind] || 0x888888).offsetHSL(0, 0, (rnd() - 0.5) * 0.06);
+    c.setHex(tint).offsetHSL(0, 0, (rnd() - 0.5) * 0.08);
+    const ou = rnd() * 7, ov = rnd() * 7;   // shift each box's texture so neighbours don't line up
     const p = g.attributes.position, n = g.attributes.normal;
     for (let i = 0; i < p.count; i++) {
-      pos.push(p.getX(i), p.getY(i), p.getZ(i));
-      nrm.push(n.getX(i), n.getY(i), n.getZ(i));
-      // darken undersides a little so ledges read clearly
-      const shade = n.getY(i) < -0.5 ? 0.7 : 1;
-      col.push(c.r * shade, c.g * shade, c.b * shade);
+      const x = p.getX(i), y = p.getY(i), z = p.getZ(i), nx = n.getX(i), ny = n.getY(i);
+      grp.pos.push(x, y, z);
+      grp.nrm.push(nx, ny, n.getZ(i));
+      if (Math.abs(nx) > 0.5) grp.uv.push(z / tile + ou, y / tile + ov);
+      else if (Math.abs(ny) > 0.5) grp.uv.push(x / tile + ou, z / tile + ov);
+      else grp.uv.push(x / tile + ou, y / tile + ov);
+      // darken undersides so ledges read clearly, and fade walls a little toward the ground
+      const shade = ny < -0.5 ? 0.6 : ny > 0.5 ? 1.06 : 0.82 + 0.18 * Math.min((y - b.by) / 1.5, 1);
+      grp.col.push(c.r * shade, c.g * shade, c.b * shade);
     }
   }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
-  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-  return new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
+  return Object.entries(groups).map(([kind, grp]) => {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(grp.pos, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(grp.nrm, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(grp.col, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(grp.uv, 2));
+    return new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, map: texture(kind) }));
+  });
 }
 
-// Grass floor with 1 m grid lines, so you can feel how fast you are going.
-function gridFloor(size) {
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = 128;
-  const g = cv.getContext('2d');
-  g.fillStyle = '#5f8f3a'; g.fillRect(0, 0, 128, 128);
-  g.fillStyle = '#6a9b43'; g.fillRect(0, 0, 64, 64); g.fillRect(64, 64, 64, 64);
-  g.fillStyle = 'rgba(255,255,255,0.35)'; g.fillRect(0, 0, 128, 3); g.fillRect(0, 0, 3, 128);
-  const tex = new THREE.CanvasTexture(cv);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(size, size);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 4;
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.MeshLambertMaterial({ map: tex }));
-  m.rotation.x = -Math.PI / 2;
-  return m;
+// The lawn: grass texture, with big soft light and dark patches so it doesn't look tiled.
+function grassFloor(size) {
+  const seg = 28;
+  const geo = new THREE.PlaneGeometry(size, size, seg, seg);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position, uv = geo.attributes.uv, col = [];
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    uv.setXY(i, x / 2.2, z / 2.2);
+    const n = Math.sin(x * 0.21 + 1.3) * Math.cos(z * 0.17 - 0.4) + Math.sin((x + z) * 0.09) * 0.7 + Math.sin(x * 0.53 - z * 0.47) * 0.35;
+    const k = 0.9 + n * 0.09;
+    col.push(k, k * (1 + n * 0.02), k * 0.96);
+  }
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  return new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ map: texture('grass'), vertexColors: true }));
+}
+
+// Little grass blades scattered over open ground, all in one draw call.
+function grassTufts(size, colliders) {
+  const blade = new THREE.ConeGeometry(0.022, 0.16, 3);
+  blade.translate(0, 0.08, 0);
+  const count = 2400;
+  const mesh = new THREE.InstancedMesh(blade, new THREE.MeshLambertMaterial({ color: 0xffffff }), count);
+  let seed = 17;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), p = new THREE.Vector3(), sc = new THREE.Vector3(), c = new THREE.Color();
+  let n = 0;
+  for (let tries = 0; n < count && tries < count * 4; tries++) {
+    p.set((rnd() - 0.5) * (size - 1), 0, (rnd() - 0.5) * (size - 1));
+    // not inside or under things sitting on the ground
+    if (colliders.some(b => b.max.y > 0.05 && b.min.y < 0.3 && p.x > b.min.x - 0.1 && p.x < b.max.x + 0.1 && p.z > b.min.z - 0.1 && p.z < b.max.z + 0.1)) continue;
+    q.setFromEuler(e.set((rnd() - 0.5) * 0.5, rnd() * 6.28, (rnd() - 0.5) * 0.5));
+    const k = 0.5 + rnd() * 1.1;
+    mesh.setMatrixAt(n, m.compose(p, q, sc.set(k, k * (0.7 + rnd() * 0.8), k)));
+    mesh.setColorAt(n, c.setHSL(0.27 + rnd() * 0.05, 0.45 + rnd() * 0.15, 0.2 + rnd() * 0.12));
+    n++;
+  }
+  mesh.count = n;
+  return mesh;
 }
 
 // A sign with controls and live numbers for tuning the feel.
@@ -215,13 +252,13 @@ function makeBoard() {
     g.fillStyle = '#f4eed6'; g.font = '36px sans-serif';
     const lines = s.mode === 'vr' ? [
       'Push the ground down and back to move.',
-      'Right trigger: spawn   A: next item   B: undo',
+      'Arm menu (X): grab an item and throw it.',
       'Grip: grab and throw   Left trigger: delete',
-      'X: calibrate   Y: back to start   Stick: turn',
+      'Right trigger: quick spawn   B: undo   Y: start',
     ] : [
       'Hold left / right click and drag down to push.',
-      'F: spawn   1-9 / wheel: pick item   Z: undo',
-      'G (hold): grab   X: delete   R: back to start',
+      'F: throw item   1-8 / wheel: pick   M: menu',
+      'G (hold): grab   X: delete   Z: undo   R: start',
     ];
     lines.forEach((t, i) => g.fillText(t, 44, 170 + i * 56));
     g.fillStyle = '#1d3628'; g.fillRect(44, 420, 936, 170);
