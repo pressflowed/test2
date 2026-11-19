@@ -1,9 +1,13 @@
-// Phase 1 test room: things to run on, jump between and climb.
+// Phase 1 test map: things to run on, jump between and climb.
 import * as THREE from 'three';
 
 const COLORS = {
-  grass: 0x5f8f3a, wood: 0x8a5e36, plank: 0xb98a52, rock: 0x8e948c, stone: 0x66706a, metal: 0x9aa7b0,
+  grass: 0x5f8f3a, 'grass-dark': 0x4f7d32, wood: 0x8a5e36, plank: 0xb98a52, rock: 0x8e948c, stone: 0x66706a,
+  leaf: 0x3d8a3f, crate: 0xc08a4c, metal: 0x9aa7b0,
 };
+
+// The map is a square MAP metres on a side (70 m: about 12x the area of the first 20 m room).
+export const MAP = 70;
 
 export function buildSandbox(scene, world) {
   const boxes = [];
@@ -11,43 +15,88 @@ export function buildSandbox(scene, world) {
     world.addBox(cx, by, cz, w, h, d, kind);
     if (visible) boxes.push({ cx, by, cz, w, h, d, kind });
   };
+  const half = MAP / 2;
 
-  // room: 20 x 20 m
-  box(0, -1, 0, 20, 1, 20, 'grass', false);   // floor collider (drawn separately with a grid)
-  const H = 4.5;
-  box(0, 0, -10.25, 21, H, 0.5, 'stone');
-  box(0, 0, 10.25, 21, H, 0.5, 'stone');
-  box(-10.25, 0, 0, 0.5, H, 20, 'stone');
-  box(10.25, 0, 0, 0.5, H, 20, 'stone');
+  // ground and outer walls
+  box(0, -1, 0, MAP + 2, 1, MAP + 2, 'grass', false);   // floor collider (drawn separately with a grid)
+  const H = 8;
+  box(0, 0, -half - 0.5, MAP + 2, H, 1, 'stone');
+  box(0, 0, half + 0.5, MAP + 2, H, 1, 'stone');
+  box(-half - 0.5, 0, 0, 1, H, MAP, 'stone');
+  box(half + 0.5, 0, 0, 1, H, MAP, 'stone');
 
-  // stairs up to a high deck (west)
-  for (let i = 0; i < 5; i++) box(-6, 0, -1 - i * 1.2, 3, 0.35 * (i + 1), 1.2, 'wood');
-  box(-6, 0, -8.2, 3, 1.75, 3.2, 'wood');
-
-  // two blocks with a 2 m gap to leap across (middle)
-  box(0, 0, -3.2, 2, 0.9, 2, 'plank');
+  // ---- centre: the original test course
+  for (let i = 0; i < 5; i++) box(-6, 0, -1 - i * 1.2, 3, 0.35 * (i + 1), 1.2, 'wood');  // stairs
+  box(-6, 0, -8.2, 3, 1.75, 3.2, 'wood');                                               // deck
+  box(0, 0, -3.2, 2, 0.9, 2, 'plank');                                                  // gap jump
   box(0, 0, -7.2, 2, 1.2, 2, 'plank');
-
-  // a tall pillar with a little cap to stand on (east)
-  box(4.5, 0, -5, 1, 5, 1, 'rock');
+  box(4.5, 0, -5, 1, 5, 1, 'rock');                                                     // pillar
   box(4.5, 5, -5, 1.8, 0.2, 1.8, 'plank');
-
-  // a chunky wall to climb, with a ledge halfway (far east)
-  box(8.6, 0, 1, 2.8, 3.4, 4, 'rock');
+  box(8.6, 0, 1, 2.8, 3.4, 4, 'rock');                                                  // climbing wall
   box(6.95, 1.6, 1, 0.5, 0.2, 3, 'plank');
-
-  // posts to swing around
-  box(4, 0, 4, 0.4, 2.6, 0.4, 'wood');
+  box(4, 0, 4, 0.4, 2.6, 0.4, 'wood');                                                  // posts
   box(5.6, 0, 2.6, 0.4, 2.6, 0.4, 'wood');
   box(4, 0, 1.2, 0.4, 2.6, 0.4, 'wood');
-
-  // low tunnel (crawl or push through)
-  box(-8.6, 0, 4.5, 0.3, 1.2, 3.2, 'wood');
+  box(-8.6, 0, 4.5, 0.3, 1.2, 3.2, 'wood');                                             // tunnel
   box(-6.9, 0, 4.5, 0.3, 1.2, 3.2, 'wood');
   box(-7.75, 1.2, 4.5, 2.0, 0.2, 3.2, 'plank');
 
+  // ---- north-east: tall trees with decks and bridges
+  const trees = [[18, -18], [28, -18], [18, -28], [28, -28]];
+  for (const [x, z] of trees) {
+    box(x, 0, z, 1.3, 14, 1.3, 'wood');
+    box(x, 4, z, 4, 0.3, 4, 'plank');
+    box(x, 8, z, 3.4, 0.3, 3.4, 'plank');
+    box(x, 11.5, z, 3, 0.3, 3, 'plank');
+    box(x, 13.4, z, 6, 2.4, 6, 'leaf');
+  }
+  box(23, 8, -18, 6.6, 0.25, 1.2, 'plank');      // bridges at the middle decks
+  box(23, 8, -28, 6.6, 0.25, 1.2, 'plank');
+  box(18, 11.5, -23, 1.2, 0.25, 7, 'plank');     // and a high one
+  for (let i = 0; i < 4; i++) box(10.5 + i * 1.5, 0, -18, 1.2, 1 + i * 0.9, 1.2, 'crate'); // steps up to the first deck
+
+  // ---- north-west: a tower with ledges spiralling up
+  const tx = -24, tz = -24;
+  box(tx, 0, tz, 5, 14, 5, 'stone');
+  box(tx, 14, tz, 7.5, 0.4, 7.5, 'plank');
+  const sides = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+  for (let k = 0; k < 7; k++) {
+    const [sx, sz] = sides[k % 4], y = 1.4 + k * 1.8;
+    if (sx) box(tx + sx * 3.2, y, tz, 1.4, 0.3, 4.2, 'plank');
+    else box(tx, y, tz + sz * 3.2, 4.2, 0.3, 1.4, 'plank');
+  }
+
+  // ---- south-east: posts to climb, then floating stepping stones up to a high perch
+  for (let i = 0; i < 5; i++) box(15 + i * 2.6, 0, 16, 1, 1 + i, 1, 'wood');
+  for (let i = 0; i < 8; i++) box(15 + i * 2.2, 1.2 + i * 0.9, 22 + i * 1.1, 2, 0.3, 2, 'plank');
+  box(32, 0, 32.5, 3, 8.5, 3, 'rock');
+
+  // ---- south-west: a terraced hill
+  for (const [w, h] of [[16, 1.2], [12, 2.4], [8, 3.6], [4.5, 4.8], [2, 6]]) box(-24, 0, 24, w, h, w, 'grass-dark');
+
+  // ---- south: a channel between two walls, for pushing off side to side
+  box(-3.2, 0, 24, 0.8, 4, 16, 'rock');
+  box(3.2, 0, 24, 0.8, 4, 16, 'rock');
+
+  // ---- east: tall blocks with gaps to leap across
+  [15, 19.5, 24.5, 30].forEach((x, i) => box(x, 0, 0, 2.6, 2.5 + i * 0.5, 2.6, 'rock'));
+
+  // ---- west: a field of crates and boulders (fixed layout)
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 18; i++) {
+    const w = 1 + rnd() * 2.2, h = 0.6 + rnd() * 2.6;
+    box(-15 - rnd() * 17, 0, -9 + rnd() * 18, w, h, 1 + rnd() * 2.2, rnd() < 0.5 ? 'crate' : 'rock');
+  }
+
+  // ---- north wall: an uneven cliff to climb
+  for (let i = 0; i < 9; i++) {
+    const x = -12 + i * 3;
+    box(x, 0, -half + 1.5, 3, 3 + ((i * 5) % 7), 2 + (i % 3) * 0.6, 'rock');
+  }
+
   scene.add(mergeBoxes(boxes));
-  scene.add(gridFloor(20));
+  scene.add(gridFloor(MAP));
 
   const board = makeBoard();
   board.mesh.position.set(-2.4, 1.35, 3.6);

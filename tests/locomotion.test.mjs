@@ -114,3 +114,46 @@ test('turning keeps the head in place', () => {
   assert.ok(after.distanceTo(before) < 1e-9, `head moved ${after.distanceTo(before)}`);
   assert.ok(Math.abs(loco.yaw - Math.PI / 4) < 1e-9);
 });
+
+test('a hand brushing the ground mid-flight does not stop you dead', () => {
+  const loco = setup();
+  run(loco, 150, rest(), [false, false]);
+  // flying forward, body clear of the ground
+  loco.vel.set(0, 0, -6);
+  loco.origin.y += 0.3;
+  // hands held still relative to the body, low enough to drag on the floor
+  const low = [V(-0.25, -1.08, -0.3).add(HEAD), V(0.25, -1.08, -0.3).add(HEAD)];
+  run(loco, 10, low);
+  assert.ok(loco.hands[0].pinned || loco.hands[1].pinned, 'hands are on the ground');
+  assert.ok(-loco.vel.z > 3, `still moving at ${-loco.vel.z} m/s`);
+});
+
+test('hands planted on the ground still hold you steady', () => {
+  const loco = setup();
+  run(loco, 150, rest(), [false, false]);
+  const planted = [V(-0.25, -0.8, -0.3).add(HEAD), V(0.25, -0.8, -0.3).add(HEAD)];
+  run(loco, 3, planted);
+  const p0 = loco.head.clone();
+  run(loco, 150, planted);
+  assert.ok(loco.head.distanceTo(p0) < 0.03, `drifted ${loco.head.distanceTo(p0)} m`);
+});
+
+test('repeated strokes keep building speed', () => {
+  const loco = setup();
+  run(loco, 150);
+  const z0 = loco.head.z;
+  let peak = 0;
+  // alternate hands: each stroke pushes the ground back fast, then lifts and swings forward
+  for (let s = 0; s < 6; s++) {
+    for (let i = 0; i <= 16; i++) {
+      const t = i / 10;
+      const push = i <= 10 ? [-0.5 + 1.0 * t, -0.95] : [0.5, -0.4];
+      const swing = [-0.5, -0.4];
+      const a = V(-0.25, push[1], push[0]).add(HEAD), b = V(0.25, swing[1], swing[0]).add(HEAD);
+      loco.update(DT, HEAD, s % 2 ? [b, a] : [a, b], [true, true]);
+      peak = Math.max(peak, -loco.vel.z);   // speed forward (-Z), not just any speed
+    }
+  }
+  assert.ok(peak > 6, `top forward speed ${peak.toFixed(2)} m/s`);
+  assert.ok(loco.head.z < z0 - 10, `went ${(z0 - loco.head.z).toFixed(1)} m forward`);
+});

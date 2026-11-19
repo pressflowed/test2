@@ -14,7 +14,10 @@ export function initAudio() {
 }
 
 // [pitch Hz, amount of noise] per surface
-const SURF = { grass: [150, 0.55], wood: [290, 0.25], plank: [340, 0.22], rock: [520, 0.12], stone: [470, 0.15], metal: [880, 0.08], pad: [120, 0.7] };
+const SURF = {
+  grass: [150, 0.55], 'grass-dark': [140, 0.55], leaf: [210, 0.8], wood: [290, 0.25], plank: [340, 0.22],
+  crate: [260, 0.3], rock: [520, 0.12], stone: [470, 0.15], metal: [880, 0.08],
+};
 
 export function tap(kind, vol = 0.5, pan = 0) {
   if (!ac || vol < 0.02) return;

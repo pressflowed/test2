@@ -73,6 +73,18 @@ const server = http.createServer((req, res) => {
   await page.screenshot({ path: path.join(out, '4-third-person.png') });
   await page.evaluate(() => { game.debugCamera = null; game.avatar.firstPerson = true; game.desktop.hands[0].held = 0; });
 
+  // bird's-eye view of the whole map
+  await page.evaluate(() => {
+    const cam = new game.THREE.PerspectiveCamera(55, game.camera.aspect, 0.5, 300);
+    cam.position.set(0, 62, 58);
+    cam.lookAt(0, 0, -2);
+    game.debugCamera = cam;
+    game.scene.fog.far = 400;
+  });
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: path.join(out, '5-map.png') });
+  await page.evaluate(() => { game.debugCamera = null; game.scene.fog.far = 110; });
+
   const moved = before[2] - mid.head[2]; // forward is -Z
   console.log(JSON.stringify({ before, after: mid.head, moved: +moved.toFixed(2), bestLaunch: +mid.best.toFixed(2), errors }, null, 1));
   await browser.close();

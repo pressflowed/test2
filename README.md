@@ -43,6 +43,6 @@ npm run serve          # http://localhost:8000 for desktop testing
 | `src/physics.js` | Box collision world |
 | `src/avatar.js` | Skeleton body: head follows the headset, IK arms, hand fit (`HAND_FIT`) |
 | `src/input-vr.js` / `src/input-desktop.js` | Headset + controllers / mouse + keyboard |
-| `src/sandbox.js` | The test room and its info board |
+| `src/sandbox.js` | The 70 x 70 m test map (`MAP` sets its size) and its info board |
 | `assets/skeleton-rig.glb` | The player model, made from `assets/skeleton.glb` by `tools/split_skeleton.py` |
 | `prototype/desktop.html` | The first desktop-only prototype, with the forest arena, bots and infection tag (used in Phase 2) |

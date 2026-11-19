@@ -20,7 +20,7 @@ renderer.xr.setFoveation(1);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xa8d3e3);
-scene.fog = new THREE.Fog(0xa8d3e3, 18, 45);
+scene.fog = new THREE.Fog(0xa8d3e3, 35, 110);
 scene.add(new THREE.HemisphereLight(0xe8f6ff, 0x4a5a2a, 1.6));
 const sun = new THREE.DirectionalLight(0xfff0d2, 1.6);
 sun.position.set(6, 12, 4);
@@ -29,7 +29,7 @@ scene.add(sun);
 // the rig is the player's play space; camera and controllers live inside it
 const rig = new THREE.Group();
 scene.add(rig);
-const camera = new THREE.PerspectiveCamera(75, 1, 0.03, 120);
+const camera = new THREE.PerspectiveCamera(75, 1, 0.03, 220);
 rig.add(camera);
 
 function resize() {

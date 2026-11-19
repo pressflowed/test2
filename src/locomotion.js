@@ -7,9 +7,12 @@
 //   2. Each hand sweeps toward its target. If it hits a surface, it stays pinned
 //      there until the real hand lifts off that surface.
 //   3. Pinned hands push the rig by (pinned point - target), so moving a pinned
-//      hand down and back moves your body up and forward.
+//      hand down and back moves your body up and forward. A planted hand can only
+//      slow you down gradually (handBrake); past that it skids along the surface,
+//      so touches keep your momentum: hands add speed far more easily than they
+//      take it away.
 //   4. When the last hand lets go, the rig keeps the average velocity of the last
-//      few frames, with a small boost. That is what turns fast strokes into leaps.
+//      few frames, with a boost. That is what turns fast strokes into leaps.
 import * as THREE from 'three';
 import { sdBox, near, pushOut } from './physics.js';
 
@@ -22,11 +25,13 @@ export const DEFAULTS = {
   bodyR: 0.22,
   handR: 0.07,
   maxReach: 1.15,      // a pinned hand lets go if it ends up this far from the head
-  stickTol: 0.02,      // how far a hand may lift off a surface before it lets go
+  stickTol: 0.008,     // how far a hand may lift off a surface before it lets go
+  handBrake: 8,        // how fast a planted hand can slow you along a surface, m/s per second
   maxPush: 0.25,       // max distance hands can move the body in one frame
-  jumpMult: 1.1,       // boost applied to the release velocity
+  jumpMult: 1.25,      // boost applied to the release velocity
   multThreshold: 1.0,  // only boost releases faster than this (m/s)
-  maxJump: 6.5,        // m/s
+  maxJump: 8.5,        // fastest launch, m/s
+  maxSpeed: 11,        // overall speed limit, m/s
   groundFriction: 10,
   historyFrames: 5,
 };
@@ -58,6 +63,8 @@ export class Locomotion {
     this._tmp = new THREE.Vector3();
     this._tmp2 = new THREE.Vector3();
     this._n = new THREE.Vector3();
+    this._v0 = new THREE.Vector3();
+    this._ct = new THREE.Vector3();
   }
 
   toWorld(local, out) {
@@ -141,6 +148,26 @@ export class Locomotion {
     return null;
   }
 
+  // How far a pinned hand moves the body. Pushes always apply in full. The only thing
+  // limited is a planted hand cancelling the momentum you already had: that can slow
+  // you by at most handBrake (m/s per second), and the hand skids along for the rest.
+  _correction(h, dt) {
+    const c = this._tmp.subVectors(h.pos, h.target);
+    // momentum along this surface
+    const mom = this._ct.copy(this._v0).addScaledVector(h.normal, -this._v0.dot(h.normal));
+    const speed = mom.length();
+    if (speed > 1e-6) {
+      mom.divideScalar(speed);
+      const braking = -c.dot(mom);                      // how much of c opposes the momentum
+      if (braking > 0) {
+        const cancel = Math.min(braking, speed * dt);   // beyond this the hand is actively pushing
+        const skid = cancel - Math.min(cancel, this.cfg.handBrake * dt * dt);
+        if (skid > 0) { c.addScaledVector(mom, skid); h.pos.addScaledVector(mom, skid); }
+      }
+    }
+    return c;
+  }
+
   /**
    * @param dt          seconds
    * @param headLocal   head position in rig space
@@ -152,9 +179,8 @@ export class Locomotion {
     this.events.length = 0;
     this._start.copy(this.origin);
 
-    // 1. free motion under gravity. While a hand is pinned the hands are in full
-    //    control, so no momentum carries over; it is handed back on release (step 4).
-    if (this.touching) this.vel.set(0, 0, 0);
+    // 1. free motion under gravity (momentum carries through hand contacts)
+    this._v0.copy(this.vel);
     this.grounded = false;
     const steps = Math.min(8, Math.max(1, Math.ceil(this.vel.length() * dt / 0.08)));
     const sdt = dt / steps;
@@ -164,7 +190,7 @@ export class Locomotion {
       this.toWorld(headLocal, this.head);
       this._collideBody(true);
     }
-    if (this.grounded && !this.touching) {
+    if (this.grounded) {
       const f = Math.exp(-c.groundFriction * dt);
       this.vel.x *= f; this.vel.z *= f;
     }
@@ -187,14 +213,14 @@ export class Locomotion {
         const lifted = sdBox(h.target, h.col) > c.handR + c.stickTol;
         const tooFar = h.pos.distanceTo(this.head) > c.maxReach;
         if (lifted || tooFar) h.pinned = false;
-        else { push.add(this._tmp.subVectors(h.pos, h.target)); n++; continue; }
+        else { push.add(this._correction(h, dt)); n++; continue; }
       }
       const before = this._tmp2.copy(h.pos);
       const speed = before.distanceTo(h.target) / Math.max(dt, 1e-4);
       const hit = this._sweep(h);
       if (hit) {
         h.pinned = true; h.col = hit;
-        push.add(this._tmp.subVectors(h.pos, h.target)); n++;
+        push.add(this._correction(h, dt)); n++;
         this.events.push({ type: 'touch', hand: h.index, kind: hit.kind, strength: Math.min(Math.max(speed / 3, 0.1), 1) });
       }
     }
@@ -211,9 +237,20 @@ export class Locomotion {
     // 4. velocity bookkeeping and the release fling
     const frameVel = this._tmp.subVectors(this.origin, this._start).divideScalar(Math.max(dt, 1e-4));
     if (n) {
-      this.vel.copy(frameVel);
       this.history.push(frameVel.clone());
       if (this.history.length > c.historyFrames) this.history.shift();
+      // Keep the momentum you already had (it may turn with your hands), but a planted
+      // hand never adds sliding speed of its own: pushes move you directly and fling
+      // you on release. Motion away from the touched surfaces isn't kept either, so
+      // pressing into a wall doesn't bounce you off it.
+      const keep = Math.min(this._v0.length(), c.maxSpeed);
+      this.vel.copy(frameVel);
+      for (const h of this.hands) {
+        if (!h.pinned) continue;
+        const vn = this.vel.dot(h.normal);
+        if (vn > 0) this.vel.addScaledVector(h.normal, -vn);
+      }
+      if (this.vel.length() > keep) this.vel.setLength(keep);
       this.touching = true;
     } else if (this.touching) {
       const v = new THREE.Vector3();
