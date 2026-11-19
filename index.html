@@ -11,57 +11,113 @@
   --bark-2: #1d3628;
   --moss: #9be15d;
   --muted: #b9c4a8;
+  --ember: #ffb38a;
   color-scheme: dark;
 }
 html, body { height: 100%; margin: 0; overflow: hidden; background: #0d1a13; color: var(--ink); font-family: system-ui, "Segoe UI", sans-serif; }
 [hidden] { display: none !important; }
 #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
-#menu { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; background: rgba(8, 18, 12, .55); }
-.card { width: min(540px, 100%); max-height: 100%; overflow: auto; box-sizing: border-box; background: var(--bark); border: 3px solid var(--bark-2); border-radius: 18px; padding: 24px; }
-h1 { margin: 0 0 4px; font-size: 40px; color: var(--moss); letter-spacing: .02em; }
-.sub { margin: 0 0 18px; color: var(--muted); }
-h2 { margin: 18px 0 8px; font-size: 14px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
-ul { margin: 0; padding-left: 20px; line-height: 1.5; }
-.buttons { display: grid; gap: 10px; margin-top: 20px; }
-button { font: inherit; font-weight: 800; font-size: 18px; padding: 13px; border: 0; border-radius: 12px; cursor: pointer; }
+#menu { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; background: rgba(8, 18, 12, .55); overflow: auto; }
+.card { width: min(620px, 100%); box-sizing: border-box; background: var(--bark); border: 3px solid var(--bark-2); border-radius: 18px; padding: 22px 24px; }
+h1 { margin: 0 0 2px; font-size: 38px; color: var(--moss); letter-spacing: .02em; }
+.sub { margin: 0 0 14px; color: var(--muted); }
+h2 { margin: 16px 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+input[type=text] { font: inherit; font-size: 17px; padding: 10px 12px; border-radius: 10px; border: 2px solid var(--bark-2); background: #0d1a13; color: var(--ink); min-width: 0; }
+input[type=text]:focus-visible { outline: 3px solid var(--moss); outline-offset: 1px; }
+#name { flex: 1 1 160px; }
+#code { width: 110px; text-transform: uppercase; letter-spacing: .2em; font-weight: 800; }
+.swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+.swatch { width: 32px; height: 32px; padding: 0; border-radius: 50%; border: 3px solid transparent; cursor: pointer; }
+.swatch[aria-pressed="true"] { border-color: var(--ink); }
+button { font: inherit; font-weight: 800; font-size: 17px; padding: 11px 16px; border: 0; border-radius: 12px; cursor: pointer; background: var(--bark-2); color: var(--ink); }
+button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+.play { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 18px; }
 #vr { background: var(--moss); color: var(--bark); }
 #vr:disabled { background: var(--bark-2); color: var(--muted); cursor: default; }
-#desktop { background: var(--bark-2); color: var(--ink); }
-button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
-#status { min-height: 1.2em; margin: 12px 0 0; color: #ffb38a; font-size: 14px; }
+.roombox { padding: 12px 14px; border-radius: 12px; background: #0d1a13; }
+#room-code { font-size: 34px; font-weight: 900; letter-spacing: .25em; color: var(--moss); }
+#room-link { font-size: 13px; color: var(--muted); word-break: break-all; user-select: all; }
+#room-who { margin: 4px 0 8px; }
+details { margin-top: 14px; color: var(--muted); }
+summary { cursor: pointer; font-weight: 700; color: var(--ink); }
+details ul { margin: 8px 0 0; padding-left: 20px; line-height: 1.5; }
+#status { min-height: 1.2em; margin: 12px 0 0; font-size: 14px; color: var(--muted); }
+#status[data-kind="error"] { color: var(--ember); }
+#status[data-kind="ok"] { color: var(--moss); }
+@media (max-width: 480px) { .play { grid-template-columns: 1fr; } }
 </style>
 <script type="importmap">
 {
   "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
   }
 }
 </script>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 <body>
 <canvas id="view"></canvas>
 <div id="menu">
   <div class="card">
     <h1>Canopy Tag</h1>
-    <p class="sub">Movement test room. No legs: push off the world with your hands.</p>
-    <h2>In VR</h2>
-    <ul>
-      <li>Push the ground down and back to move. Fast strokes, then let go, to leap.</li>
-      <li>Push down on walls and posts to climb.</li>
-      <li><b>A / X</b>: calibrate. Stand up straight with your arms relaxed, then press.</li>
-      <li><b>B / Y</b>: back to start. <b>Right stick</b>: snap turn.</li>
-    </ul>
-    <h2>On desktop</h2>
-    <ul>
-      <li>Hold <b>left / right click</b> and drag the mouse down to push with that hand. <b>Space</b> uses both.</li>
-      <li>Mouse looks around. <b>Q / E</b> turn. <b>R</b> resets. <b>Esc</b> pauses.</li>
-    </ul>
-    <div class="buttons">
+    <p class="sub">Sandbox. No legs: push off the world with your hands. Spawn props, throw them, build, and bring a friend.</p>
+
+    <h2>You</h2>
+    <div class="row">
+      <input id="name" type="text" maxlength="16" aria-label="Your name" autocomplete="off">
+      <div class="swatches" role="group" aria-label="Skeleton colour">
+        <button class="swatch" data-color="dcd1a8" aria-label="Bone" type="button"></button>
+        <button class="swatch" data-color="e56b5d" aria-label="Red" type="button"></button>
+        <button class="swatch" data-color="f0a04b" aria-label="Orange" type="button"></button>
+        <button class="swatch" data-color="e8d45a" aria-label="Yellow" type="button"></button>
+        <button class="swatch" data-color="7ccf6a" aria-label="Green" type="button"></button>
+        <button class="swatch" data-color="5fc9d8" aria-label="Cyan" type="button"></button>
+        <button class="swatch" data-color="6f8cf0" aria-label="Blue" type="button"></button>
+        <button class="swatch" data-color="b07ce0" aria-label="Purple" type="button"></button>
+        <button class="swatch" data-color="f08ac0" aria-label="Pink" type="button"></button>
+        <button class="swatch" data-color="5a5a5a" aria-label="Charcoal" type="button"></button>
+      </div>
+    </div>
+
+    <h2>Play with friends</h2>
+    <div id="room-solo" class="row">
+      <button id="host" type="button">Host a room</button>
+      <span>or join:</span>
+      <input id="code" type="text" maxlength="4" placeholder="CODE" aria-label="Room code" autocomplete="off">
+      <button id="join" type="button">Join</button>
+    </div>
+    <div id="room-on" class="roombox" hidden>
+      <div>Room code <span id="room-code"></span></div>
+      <p id="room-who"></p>
+      <div class="row">
+        <span id="room-link"></span>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="copy" type="button">Copy invite link</button>
+        <button id="leave" type="button">Leave room</button>
+      </div>
+    </div>
+
+    <div class="play">
       <button id="vr" type="button" disabled>Checking for VR...</button>
       <button id="desktop" type="button">Play on desktop</button>
     </div>
-    <p id="status"></p>
+    <p id="status" role="status"></p>
+
+    <details>
+      <summary>Controls</summary>
+      <ul>
+        <li><b>Move:</b> push the ground down and back with your hands. Fast strokes, then let go, to leap. Push down on walls to climb.</li>
+        <li><b>VR right hand:</b> trigger spawns the item shown above your left hand, <b>A</b> picks the next item, <b>B</b> undoes your last spawn, stick snap-turns.</li>
+        <li><b>VR left hand:</b> trigger deletes the prop nearest that hand, <b>X</b> calibrates your height (stand tall, arms relaxed), <b>Y</b> takes you back to the start.</li>
+        <li><b>Grip (either hand):</b> grab a prop; let go to throw it.</li>
+        <li><b>Control panel</b> by the start: slap the buttons for low gravity, clearing props, or a prop rain.</li>
+        <li><b>Desktop:</b> hold left / right click and drag down to push; Space for both hands. 1–9 or the mouse wheel pick an item, F spawns, G (hold) grabs with the right hand, X deletes near it, Z undoes, Q / E turn, R resets, Esc pauses.</li>
+      </ul>
+    </details>
   </div>
 </div>
 <script type="module" src="src/main.js"></script>

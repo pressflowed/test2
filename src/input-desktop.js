@@ -17,6 +17,8 @@ export class DesktopInput {
       local: new THREE.Vector3(), quat: new THREE.Quaternion(),
     }));
     this.keys = {};
+    this.pressed = new Set();   // keys pressed since the last frame
+    this.wheel = 0;
     this.dx = 0; this.dy = 0;
     this.onRespawn = () => {};
     this._e = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -39,9 +41,11 @@ export class DesktopInput {
       if (e.button === 2) this.hands[1].held &= ~1;
     });
     addEventListener('contextmenu', e => { if (this.enabled) e.preventDefault(); });
+    addEventListener('wheel', e => { if (this.enabled) this.wheel += Math.sign(e.deltaY); }, { passive: true });
     addEventListener('keydown', e => {
       this.keys[e.code] = true;
       if (!this.enabled) return;
+      if (!e.repeat) this.pressed.add(e.code);
       if (e.code === 'Space') { if (!e.repeat) { this.grab(0, 2); this.grab(1, 2); } e.preventDefault(); }
       if (e.code === 'KeyR' && !e.repeat) this.onRespawn();
     });
@@ -50,6 +54,14 @@ export class DesktopInput {
       if (e.code === 'Space') for (const h of this.hands) h.held &= ~2;
     });
     addEventListener('blur', () => { for (const h of this.hands) h.held = 0; this.keys = {}; });
+  }
+
+  /** Keys pressed since the last call, and mouse wheel steps. */
+  takeInput() {
+    const out = { pressed: this.pressed, wheel: this.wheel };
+    this.pressed = new Set();
+    this.wheel = 0;
+    return out;
   }
 
   lock() {

@@ -98,12 +98,59 @@ export function buildSandbox(scene, world) {
   scene.add(mergeBoxes(boxes));
   scene.add(gridFloor(MAP));
 
+  // ---- control panel near the start: slap the buttons on top
+  box(3.2, 0, 4.6, 0.6, 0.45, 2.6, 'stone');
+  box(3.55, 0, 4.6, 0.12, 1.2, 2.6, 'stone');
+  const buttons = PANEL.map((b, i) => {
+    const z = 3.75 + i * 0.85;
+    const col = world.addBox(3.15, 0.45, z, 0.34, 0.1, 0.55, 'metal');
+    col.button = b.id;
+    const mat = new THREE.MeshLambertMaterial({ color: b.color, emissive: 0x000000 });
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.1, 0.55), mat);
+    mesh.position.set(3.15, 0.5, z);
+    scene.add(mesh);
+    return { ...b, col, mesh, mat };
+  });
+  const labels = makePanelLabels();
+  labels.position.set(3.48, 0.86, 4.6);
+  labels.rotation.y = -Math.PI / 2;
+  scene.add(labels);
+
   const board = makeBoard();
   board.mesh.position.set(-2.4, 1.35, 3.6);
   board.mesh.rotation.y = 0.45;
   scene.add(board.mesh);
 
-  return { spawn: new THREE.Vector3(0, 0, 6), spawnYaw: 0, board };
+  return { spawn: new THREE.Vector3(0, 0, 6), spawnYaw: 0, board, buttons };
+}
+
+export const PANEL = [
+  { id: 'lowgrav', label: 'Low gravity', color: 0x6f8cf0 },
+  { id: 'clear', label: 'Clear props', color: 0xe0523a },
+  { id: 'rain', label: 'Prop rain', color: 0xf0c04b },
+];
+
+/** Light a panel button: on = lit, or flash briefly. */
+export function lightButton(btn, on) {
+  btn.mat.emissive.setHex(on ? 0x555555 : 0x000000);
+}
+
+function makePanelLabels() {
+  const cv = document.createElement('canvas');
+  cv.width = 1024; cv.height = 256;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#1d3628'; g.fillRect(0, 0, 1024, 256);
+  g.fillStyle = '#f4eed6'; g.font = 'bold 30px sans-serif'; g.textAlign = 'center';
+  g.fillText('SLAP A BUTTON', 512, 50);
+  g.font = 'bold 54px sans-serif';
+  // seen from the start area the sign's left-to-right runs along +Z, the same order as the buttons
+  PANEL.forEach((b, i) => {
+    g.fillStyle = '#' + b.color.toString(16).padStart(6, '0');
+    g.fillText(b.label, 512 + (i - 1) * 330, 170);
+  });
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return new THREE.Mesh(new THREE.PlaneGeometry(2.6, 0.65), new THREE.MeshBasicMaterial({ map: tex }));
 }
 
 // One mesh for all level boxes, coloured per surface, so the headset draws it in one call.
@@ -164,17 +211,17 @@ function makeBoard() {
     if (key === lastKey) return;
     lastKey = key;
     g.fillStyle = '#13241b'; g.fillRect(0, 0, 1024, 640);
-    g.fillStyle = '#9be15d'; g.font = 'bold 64px sans-serif'; g.fillText('Canopy Tag: test room', 44, 92);
+    g.fillStyle = '#9be15d'; g.font = 'bold 64px sans-serif'; g.fillText('Canopy Tag sandbox', 44, 92);
     g.fillStyle = '#f4eed6'; g.font = '36px sans-serif';
     const lines = s.mode === 'vr' ? [
       'Push the ground down and back to move.',
-      'Fast strokes, then let go, to leap.',
-      'A / X: calibrate (stand tall, arms relaxed)',
-      'B / Y: back to start    Right stick: turn',
+      'Right trigger: spawn   A: next item   B: undo',
+      'Grip: grab and throw   Left trigger: delete',
+      'X: calibrate   Y: back to start   Stick: turn',
     ] : [
       'Hold left / right click and drag down to push.',
-      'Space: both hands    Q / E: turn',
-      'R: back to start    Esc: pause',
+      'F: spawn   1-9 / wheel: pick item   Z: undo',
+      'G (hold): grab   X: delete   R: back to start',
     ];
     lines.forEach((t, i) => g.fillText(t, 44, 170 + i * 56));
     g.fillStyle = '#1d3628'; g.fillRect(44, 420, 936, 170);

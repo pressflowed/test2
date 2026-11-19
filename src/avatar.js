@@ -11,16 +11,20 @@ const Y_FLIP = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0
 // If the palms face outward on the headset, flip palmSign.
 export const HAND_FIT = { fingerTilt: -0.45, palmRoll: 1.05, palmSign: 1, palmOffset: 0.08 };
 
+export const BONE = 0xdcd1a8;
+
 export class Avatar {
-  static async load(url, scene) {
-    const gltf = await new GLTFLoader().loadAsync(url);
-    return new Avatar(gltf.scene, scene);
+  /** Load the model once; every Avatar is made from a copy of it. */
+  static async loadTemplate(url) {
+    return (await new GLTFLoader().loadAsync(url)).scene;
   }
 
-  constructor(rigScene, scene) {
+  constructor(template, scene, { color = BONE, name = null } = {}) {
+    const rigScene = template.clone(true);
+    this.scene = scene;
     const parts = {};
     rigScene.traverse(o => { if (o.isMesh) parts[o.name] = o; });
-    const mat = new THREE.MeshLambertMaterial({ color: 0xdcd1a8, side: THREE.DoubleSide });
+    const mat = new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide });
     for (const p of Object.values(parts)) { p.material = mat; p.frustumCulled = false; }
     this.material = mat;
 
@@ -50,11 +54,38 @@ export class Avatar {
     });
     this._q = new THREE.Quaternion();
     this._v = [0, 1, 2, 3, 4, 5].map(() => new THREE.Vector3());
+    this.label = null;
+    if (name) this.setName(name);
   }
 
   set firstPerson(on) { this.head.visible = !on; }
 
   setColor(hex) { this.material.color.setHex(hex); }
+
+  /** Floating name tag above the head. */
+  setName(name) {
+    if (this.label) { this.root.remove(this.label); this.label.material.map.dispose(); this.label.material.dispose(); }
+    const cv = document.createElement('canvas');
+    cv.width = 512; cv.height = 96;
+    const g = cv.getContext('2d');
+    g.font = 'bold 56px system-ui, sans-serif';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.lineWidth = 10; g.strokeStyle = 'rgba(10,20,14,.85)'; g.strokeText(name, 256, 50);
+    g.fillStyle = '#f4eed6'; g.fillText(name, 256, 50);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    this.label = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+    this.label.scale.set(0.8, 0.15, 1);
+    this.label.position.set(0, 0.32, 0);
+    this.root.add(this.label);
+  }
+
+  dispose() {
+    this.scene.remove(this.root);
+    for (const a of this.arms) this.scene.remove(a.upper, a.fore, a.hand);
+    this.material.dispose();
+    if (this.label) { this.label.material.map.dispose(); this.label.material.dispose(); }
+  }
 
   /**
    * @param headPos   world position of the eyes

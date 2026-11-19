@@ -25,9 +25,10 @@ const server = http.createServer((req, res) => {
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
-  await page.route('https://cdn.jsdelivr.net/npm/three@0.160.0/**', route => {
-    const rel = route.request().url().split('three@0.160.0/')[1];
-    route.fulfill({ path: path.join(root, 'node_modules/three', rel), contentType: 'text/javascript' });
+  await page.route('https://cdn.jsdelivr.net/npm/**', route => {
+    // https://cdn.jsdelivr.net/npm/<package>@<version>/<file>  ->  node_modules/<package>/<file>
+    const m = route.request().url().match(/\/npm\/([^@/]+)@[^/]+\/(.*)$/);
+    route.fulfill({ path: path.join(root, 'node_modules', m[1], m[2]), contentType: 'text/javascript' });
   });
 
   // headless Chrome grants pointer lock and then drops it, which pauses the game: stub it out
@@ -72,6 +73,27 @@ const server = http.createServer((req, res) => {
   await page.waitForTimeout(200);
   await page.screenshot({ path: path.join(out, '4-third-person.png') });
   await page.evaluate(() => { game.debugCamera = null; game.avatar.firstPerson = true; game.desktop.hands[0].held = 0; });
+
+  // sandbox: rain props from the panel and build a little stack, then look at it
+  await page.evaluate(() => {
+    game.session.pressButton('rain');
+    const T = game.THREE;
+    game.session.selected = 8; // trampoline
+    game.session.spawnSelected(new T.Vector3(-2, 0.15, 1.5), new T.Quaternion());
+    game.session.selected = 5; // big crate
+    game.session.spawnSelected(new T.Vector3(1.5, 0.8, 1.5), new T.Quaternion());
+  });
+  await page.waitForTimeout(3500);
+  const propCount = await page.evaluate(() => game.session.props.props.size);
+  await page.evaluate(() => {
+    const cam = new game.THREE.PerspectiveCamera(60, game.camera.aspect, 0.05, 200);
+    cam.position.set(0, 5, 8);
+    cam.lookAt(0, 0.5, -1.5);
+    game.debugCamera = cam;
+  });
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: path.join(out, '6-props.png') });
+  if (propCount < 15) errors.push(`only ${propCount} props after the rain`);
 
   // bird's-eye view of the whole map
   await page.evaluate(() => {

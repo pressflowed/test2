@@ -7,10 +7,10 @@
 //   2. Each hand sweeps toward its target. If it hits a surface, it stays pinned
 //      there until the real hand lifts off that surface.
 //   3. Pinned hands push the rig by (pinned point - target), so moving a pinned
-//      hand down and back moves your body up and forward. A planted hand can only
-//      slow you down gradually (handBrake); past that it skids along the surface,
-//      so touches keep your momentum: hands add speed far more easily than they
-//      take it away.
+//      hand down and back moves your body up and forward. A planted hand never
+//      slows you down: if it would, it skids along the surface instead (handBrake
+//      sets how much grip it keeps against your momentum; 0 = none), so touches
+//      keep your speed and hands only ever add to it.
 //   4. When the last hand lets go, the rig keeps the average velocity of the last
 //      few frames, with a boost. That is what turns fast strokes into leaps.
 import * as THREE from 'three';
@@ -25,8 +25,8 @@ export const DEFAULTS = {
   bodyR: 0.22,
   handR: 0.07,
   maxReach: 1.15,      // a pinned hand lets go if it ends up this far from the head
-  stickTol: 0.008,     // how far a hand may lift off a surface before it lets go
-  handBrake: 8,        // how fast a planted hand can slow you along a surface, m/s per second
+  stickTol: 0.002,     // how far a hand may lift off a surface before it lets go
+  handBrake: 0,        // how fast a planted hand can slow you along a surface, m/s per second (0 = never)
   maxPush: 0.25,       // max distance hands can move the body in one frame
   jumpMult: 1.25,      // boost applied to the release velocity
   multThreshold: 1.0,  // only boost releases faster than this (m/s)
@@ -114,7 +114,11 @@ export class Locomotion {
           this.head.x += ddx; this.head.y += ddy; this.head.z += ddz;
           if (fixVel) {
             const vn = this.vel.dot(this._n);
-            if (vn < 0) this.vel.addScaledVector(this._n, -vn);
+            if (vn < 0) {
+              // bouncy surfaces (trampolines) throw you back off them
+              const bounce = col.bouncy && vn < -1 ? col.bouncy : 0;
+              this.vel.addScaledVector(this._n, -vn * (1 + bounce));
+            }
           }
           if (this._n.y > 0.6) { this.grounded = true; this.groundKind = col.kind; }
         }
@@ -209,6 +213,7 @@ export class Locomotion {
         h.pos.copy(h.target); this._pushOutAll(h.pos, c.handR);
         continue;
       }
+      if (h.pinned && h.col.delta) h.pos.add(h.col.delta);   // ride along with moving props
       if (h.pinned) {
         const lifted = sdBox(h.target, h.col) > c.handR + c.stickTol;
         const tooFar = h.pos.distanceTo(this.head) > c.maxReach;
@@ -221,7 +226,7 @@ export class Locomotion {
       if (hit) {
         h.pinned = true; h.col = hit;
         push.add(this._correction(h, dt)); n++;
-        this.events.push({ type: 'touch', hand: h.index, kind: hit.kind, strength: Math.min(Math.max(speed / 3, 0.1), 1) });
+        this.events.push({ type: 'touch', hand: h.index, kind: hit.kind, col: hit, strength: Math.min(Math.max(speed / 3, 0.1), 1) });
       }
     }
 
