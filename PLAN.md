@@ -67,3 +67,19 @@ Tuning values all live in one table: jump boost, max speed, stickiness, arm leng
 ## Existing work
 
 `index.html` is a desktop prototype. Holding a mouse button swings a hand. It already has the hand-pin physics, the arena, the bots and infection tag. Phase 1 swaps the mouse-driven hand targets for real controller positions and moves the code to ES modules.
+
+## Player model
+
+`assets/skeleton.glb` is the skeleton you exported from Blender. Running `python3 tools/split_skeleton.py` turns it into `assets/skeleton-rig.glb`:
+- **Parts:** `Head`, `Torso`, `UpperArm_L/R`, `Forearm_L/R`, `Hand_L/R`. Your export had both arms merged into each part, so the script splits them down the middle.
+- **Origins:** each part's origin sits at its joint, and each arm part stores its rest joint positions in `extras.from` / `extras.to` for 2-bone IK.
+- **Scale and position:** in metres, facing +Z, with the root at the eye point. Shoulder to wrist is 0.80 m.
+- **Material:** one bone-colored material. The export had none, so it would have rendered white.
+- **Size:** about 17.9k triangles. That's fine for the local player. Bots and other players may need a lower-poly version on Quest 2.
+
+How it's driven in VR:
+- `Head` follows the headset.
+- `Torso` hangs below the head and turns with your view direction.
+- `Hand_L/R` follow the controllers.
+- The upper arm and forearm are solved with 2-bone IK between shoulder and wrist.
+- In first person, your own head is hidden.
