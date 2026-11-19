@@ -1,0 +1,39 @@
+// Short synthesized taps for hand contacts. No sound files needed.
+let ac = null, noise = null;
+
+export function initAudio() {
+  try {
+    if (!ac) {
+      ac = new (window.AudioContext || window.webkitAudioContext)();
+      noise = ac.createBuffer(1, Math.floor(ac.sampleRate * 0.15), ac.sampleRate);
+      const d = noise.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    if (ac.state === 'suspended') ac.resume();
+  } catch (e) { ac = null; }
+}
+
+// [pitch Hz, amount of noise] per surface
+const SURF = { grass: [150, 0.55], wood: [290, 0.25], plank: [340, 0.22], rock: [520, 0.12], stone: [470, 0.15], metal: [880, 0.08], pad: [120, 0.7] };
+
+export function tap(kind, vol = 0.5, pan = 0) {
+  if (!ac || vol < 0.02) return;
+  const [f, nz] = SURF[kind] || [250, 0.3];
+  const t = ac.currentTime, k = 0.9 + Math.random() * 0.2;
+  const out = ac.createStereoPanner ? ac.createStereoPanner() : ac.createGain();
+  if (out.pan) out.pan.value = pan;
+  out.connect(ac.destination);
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(f * k, t);
+  o.frequency.exponentialRampToValueAtTime(f * k * 0.5, t + 0.09);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.25 * vol, t + 0.004);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+  o.connect(g).connect(out); o.start(t); o.stop(t + 0.14);
+  const s = ac.createBufferSource(), bp = ac.createBiquadFilter(), g2 = ac.createGain();
+  s.buffer = noise; bp.type = 'bandpass'; bp.frequency.value = f * 4; bp.Q.value = 1.2;
+  g2.gain.setValueAtTime(0.3 * nz * vol, t);
+  g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
+  s.connect(bp).connect(g2).connect(out); s.start(t); s.stop(t + 0.12);
+}

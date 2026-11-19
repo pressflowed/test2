@@ -98,7 +98,10 @@ for s in 'LR':
     elbow = (el + el2) / 2
     hp = hand[s][0]
     tip = hp[np.argmax(np.linalg.norm(hp - wr, axis=1))]
-    joints[s] = dict(shoulder=sh, elbow=elbow, wrist=wr, tip=tip)
+    # palm normal: the hand's thinnest direction, pointed toward the body's midline (palms facing in)
+    hc = hp.mean(axis=0); palm = np.linalg.svd(hp - hc, full_matrices=False)[2][2]
+    if (palm[0] > 0) == (s == 'L'): palm = -palm
+    joints[s] = dict(shoulder=sh, elbow=elbow, wrist=wr, tip=tip, palm=palm)
 
 scale = ARM_LENGTH / np.mean([np.linalg.norm(j['elbow'] - j['shoulder']) + np.linalg.norm(j['wrist'] - j['elbow']) for j in joints.values()])
 to_rig = lambda v: (np.asarray(v) - eye) * scale
@@ -126,10 +129,10 @@ def add_mesh(name, mesh, origin):
 r = lambda v: [round(float(x), 5) for x in v]
 spec = [('Head', head, to_rig(eye), {}), ('Torso', torso, to_rig([mid, skull_p[:, 1].min(), skull_c[2]]), {})]
 for s in 'LR':
-    j = {k: to_rig(v) for k, v in joints[s].items()}
+    j = {k: to_rig(v) for k, v in joints[s].items() if k != 'palm'}
     spec += [(f'UpperArm_{s}', upper[s], j['shoulder'], {'from': r(j['shoulder']), 'to': r(j['elbow'])}),
              (f'Forearm_{s}', fore[s], j['elbow'], {'from': r(j['elbow']), 'to': r(j['wrist'])}),
-             (f'Hand_{s}', hand[s], j['wrist'], {'from': r(j['wrist']), 'to': r(j['tip'])})]
+             (f'Hand_{s}', hand[s], j['wrist'], {'from': r(j['wrist']), 'to': r(j['tip']), 'palm': r(joints[s]['palm'])})]
 total = 0
 for name, mesh, origin, extras in spec:
     mi, tris = add_mesh(name, mesh, origin); total += tris

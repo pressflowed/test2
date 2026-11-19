@@ -53,7 +53,7 @@ Tuning values all live in one table: jump boost, max speed, stickiness, arm leng
 
 | Phase | What ships | Done when |
 |---|---|---|
-| **1. Movement sandbox** | A VR test room with floor, walls, a ramp of steps and a tall pillar. Enter VR button, hand physics, haptics, sounds, height calibration, desktop mouse mode | You can run, jump and climb the pillar on a Quest, and the feel is tuned |
+| **1. Movement sandbox** (built, needs testing on a Quest) | A VR test room with floor, walls, a ramp of steps and a tall pillar. Enter VR button, hand physics, haptics, sounds, height calibration, desktop mouse mode | You can run, jump and climb the pillar on a Quest, and the feel is tuned |
 | **2. Game** | Arena, infection rules, bots, wrist HUD, round flow | A full solo round is playable in VR |
 | **3. Polish** | Menu in VR, player colors, snap turn and vignette options, sound pass, performance pass | Steady frame rate on Quest 2 |
 | **4. Multiplayer** | Room codes, synced head and hands at about 20 Hz, tags decided by the host, optional voice | Two headsets can tag each other |
