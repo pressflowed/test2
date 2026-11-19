@@ -4,6 +4,8 @@ A VR tag game where you have no legs: you move by pushing off the world with you
 
 **Current state: Phase 1, the movement test room.**
 
+**Play:** https://pressflowed.github.io/test2/ (open it in the Meta Quest Browser and press Enter VR, or play on desktop)
+
 ## Play it on a Quest
 
 WebXR only works from an `https://` address, so the game is hosted on GitHub Pages:
