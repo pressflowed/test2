@@ -1,6 +1,9 @@
 // Short synthesized taps for hand contacts. No sound files needed.
 let ac = null, noise = null;
 
+/** The shared audio context, or null before the first click (browsers need one to start sound). */
+export function audioContext() { return ac; }
+
 export function initAudio() {
   try {
     if (!ac) {
@@ -116,4 +119,39 @@ export function jingle(notes, vol = 0.5) {
     g.gain.exponentialRampToValueAtTime(0.0001, at + 0.28);
     o.connect(g).connect(ac.destination); o.start(at); o.stop(at + 0.3);
   });
+}
+
+/** The ground shaking under something huge: a deep thud. vol 0..1 */
+export function thump(vol = 1) {
+  if (!ac || vol < 0.02) return;
+  const t = ac.currentTime;
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(62, t);
+  o.frequency.exponentialRampToValueAtTime(30, t + 0.3);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.95 * vol, t + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+  o.connect(g).connect(ac.destination); o.start(t); o.stop(t + 0.5);
+  const s = ac.createBufferSource(), lp = ac.createBiquadFilter(), g2 = ac.createGain();
+  s.buffer = noise; lp.type = 'lowpass'; lp.frequency.value = 320;
+  g2.gain.setValueAtTime(0.5 * vol, t);
+  g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+  s.connect(lp).connect(g2).connect(ac.destination); s.start(t); s.stop(t + 0.15);
+}
+
+/** Your own heart, when the giant is close: two soft low beats. vol 0..1 */
+export function heartbeat(vol = 1) {
+  if (!ac || vol < 0.02) return;
+  const t = ac.currentTime;
+  for (const [at, f, v] of [[0, 58, 1], [0.16, 48, 0.7]]) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(f, t + at);
+    o.frequency.exponentialRampToValueAtTime(f * 0.6, t + at + 0.12);
+    g.gain.setValueAtTime(0.0001, t + at);
+    g.gain.exponentialRampToValueAtTime(0.5 * vol * v, t + at + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.16);
+    o.connect(g).connect(ac.destination); o.start(t + at); o.stop(t + at + 0.18);
+  }
 }

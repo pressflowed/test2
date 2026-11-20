@@ -48,7 +48,9 @@ const until = (page, fn, arg, ms = 15000) => page.waitForFunction(fn, arg, { tim
 
 (async () => {
   const browser = await chromium.launch({
-    args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-features=WebRtcHideLocalIpsWithMdns', '--allow-loopback-in-peer-connection'],
+    // a fake microphone (it beeps) that needs no permission click, and sound without a click
+    args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-features=WebRtcHideLocalIpsWithMdns', '--allow-loopback-in-peer-connection',
+      '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required'],
   });
   try {
     // host
@@ -71,6 +73,46 @@ const until = (page, fn, arg, ms = 15000) => page.waitForFunction(fn, arg, { tim
     await b.click('#desktop');
     check(await until(a, () => game.session.players.size === 1 && [...game.session.players.values()][0].name === 'Bob'), 'host sees Bob in the room');
     check(await until(b, () => [...game.session.players.values()].some(p => p.name === 'Alice')), 'friend sees Alice in the room');
+
+    // ---- voice chat: a call connects by itself, so each can hear the other even before any microphone is on
+    check(await until(a, () => game.voice.connected === 1, null, 30000), 'the host has a voice link to the friend');
+    check(await until(b, () => game.voice.connected === 1, null, 30000), 'the friend has a voice link to the host');
+    check(await a.evaluate(() => !game.voice.on), 'no microphone is used until you turn it on');
+    await a.click('#mic');
+    check(await until(a, () => game.voice.speaking && document.getElementById('mic').textContent.includes('Microphone on')), 'the host turned the microphone on from the menu');
+    const hears = page => until(page, () => { for (const c of game.voice.calls.values()) if (c.level > 0.02) return true; return false; }, null, 30000);
+    check(await hears(b), 'the friend receives the host\'s voice');
+    await b.evaluate(() => game.voice.enable());
+    check(await hears(a), 'and the host receives the friend\'s');
+    // distance: right next to each other is loud, far away is quiet, and the side matches
+    const hostHead = await a.evaluate(() => { game.desktop.yaw = 0; return game.loco.head.toArray(); });
+    const friendAt = async (dx, dz) => { await b.evaluate(([h, x, z]) => game.loco.teleport(new game.THREE.Vector3(h[0] + x, 0, h[2] + z)), [hostHead, dx, dz]); await b.waitForTimeout(900); };
+    const heard = () => a.evaluate(() => { const c = [...game.voice.calls.values()][0]; return { volume: c.volume, side: c.side }; });
+    await friendAt(1.5, 0);
+    let v = await heard();
+    check(v.volume > 0.9 && v.side > 0.4, `close on the right: loud and to the right (${JSON.stringify(v)})`);
+    await friendAt(-12, 0);
+    v = await heard();
+    check(v.volume > 0.2 && v.volume < 0.45 && v.side < -0.4, `12 m to the left: quieter and to the left (${JSON.stringify(v)})`);
+    await friendAt(0, 34);
+    v = await heard();
+    check(v.volume < 0.05, `34 m away: almost silent (${JSON.stringify(v)})`);
+    await a.click('#mic');
+    check(await a.evaluate(() => game.voice.muted && !game.voice.mic.getAudioTracks()[0].enabled), 'clicking again mutes the microphone');
+    await a.click('#mic');
+    await friendAt(2, 2);
+
+    // ---- big players shake the ground: others hear and feel it; small players do not shake anything
+    for (const pg of [a, b]) await pg.evaluate(() => { window.thumps = []; const f = game.session.onThump; game.session.onThump = (p, s) => { window.thumps.push(s); f(p, s); }; });
+    await b.evaluate(() => game.session.thump(game.loco.head, 1));
+    await b.waitForTimeout(500);
+    check(await a.evaluate(() => window.thumps.length === 0), 'a normal-sized player cannot shake the ground');
+    await a.evaluate(() => game.setSize(5));
+    await a.waitForTimeout(700);     // let the friend see the new size
+    await a.evaluate(() => game.stomp({ speed: 14, point: game.loco.head.clone().setY(0), col: null }, performance.now()));
+    check(await until(b, () => window.thumps.length === 1 && window.thumps[0] > 0.8), 'a 2x player landing hard is felt by the friend');
+    check(await a.evaluate(() => window.thumps.length === 0), 'the stomper does not get an echo of their own stomp');
+    await a.evaluate(() => game.setSize(3));
 
     // someone who joins later still gets every hole made so far
     check(await until(b, () => !game.voxels.solidAt(-24, 3, -21.8) && game.voxels.solidAt(-24, 6, -22)), 'the friend sees the hole that was made before they joined');
@@ -180,6 +222,15 @@ const until = (page, fn, arg, ms = 15000) => page.waitForFunction(fn, arg, { tim
     await hider.evaluate(() => { game.desktop.yaw = Math.PI; game.desktop.pitch = 0.5; });
     await hider.waitForTimeout(600);
     await hider.screenshot({ path: path.join(out, 'mp-hider-view.png') });
+    // a hider's heart pounds when the giant is near, and calms down far away
+    const gHead = await giant.evaluate(() => game.loco.head.toArray());
+    await hider.evaluate(g => { game.stats.beats = 0; game.loco.teleport(new game.THREE.Vector3(g[0] + 22, 0, g[2] + 14)); }, gHead);
+    await hider.waitForTimeout(2500);
+    check(await hider.evaluate(() => game.stats.beats === 0), 'no heartbeat when the giant is far away');
+    await hider.evaluate(g => game.loco.teleport(new game.THREE.Vector3(g[0] + 4, 0, g[2] + 3)), gHead);
+    check(await until(hider, () => game.stats.beats >= 2, null, 30000), 'the heartbeat starts when the giant is close');
+    check(await giant.evaluate(() => !game.stats.beats), 'the giant has no heartbeat');
+
     // the hider runs into the giant's hand: caught, and with nobody left the giant wins
     const hand = await giant.evaluate(() => game.loco.hands[1].pos.toArray());
     await hider.evaluate(h => { game.loco.teleport(new game.THREE.Vector3(h[0], h[1] - 0.2 - 1.5 * 0.25 + 0.0, h[2])); }, hand);

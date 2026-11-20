@@ -230,3 +230,19 @@ test('a punch reports where it landed and how hard, and the hand lets go when th
   loco.update(DT, HEAD, [V(-0.25, -0.2, -0.2).add(HEAD), V(0.25, -0.2, -1.2).add(HEAD)], [true, true]);
   assert.ok(!loco.hands[1].pinned, 'hand goes into the hole');
 });
+
+test('a hard landing is reported, a gentle step is not', () => {
+  const loco = setup();
+  run(loco, 150, rest(), [false, false]);
+  // stepping off nothing: just standing produces no landings
+  let lands = [];
+  for (let i = 0; i < 60; i++) { loco.update(DT, HEAD, rest(), [false, false]); lands.push(...loco.events.filter(e => e.type === 'land')); }
+  assert.equal(lands.length, 0, 'standing still');
+  // drop from 4 m
+  loco.teleport(V(0, 4, 0));
+  lands = [];
+  for (let i = 0; i < 150; i++) { loco.update(DT, HEAD, rest(), [false, false]); lands.push(...loco.events.filter(e => e.type === 'land')); }
+  assert.equal(lands.length, 1, 'one landing');
+  assert.ok(lands[0].speed > 7 && lands[0].speed < 10, `impact speed ${lands[0].speed}`);
+  assert.ok(Math.abs(lands[0].point.y) < 0.05, `at the feet: ${lands[0].point.y}`);
+});

@@ -214,6 +214,18 @@ const server = http.createServer((req, res) => {
   if (felled.top || !felled.stump || felled.lost < 15000) errors.push(`cutting the tower should bring it down: ${JSON.stringify(felled)}`);
   await gameWait(0.4);
   await view('12-tower-felled.png', [-14, 6, -12], [-24, 2, -24], 110);
+  // a 2x player dropping onto the hill cracks it and knocks blocks loose; a normal-sized one does not
+  const drop = async size => {
+    await page.evaluate(sz => { game.session.resetMap(); game.setSize(sz); game.loco.teleport(new game.THREE.Vector3(-24, 13, 24)); }, size);
+    const n0 = await page.evaluate(() => game.voxels.count());
+    await gameWait(2.5);
+    return page.evaluate(n => ({ lost: n - game.voxels.count(), log: game.session.carveLog.length, y: game.loco.head.y }), n0);
+  };
+  const small = await drop(3), big = await drop(5);
+  if (small.lost !== 0) errors.push(`a normal-sized landing should not break anything: ${JSON.stringify(small)}`);
+  if (big.lost < 20 || big.log < 2) errors.push(`a giant landing should crack the ground and chip blocks: ${JSON.stringify(big)}`);
+  await page.evaluate(() => { game.setSize(3); });
+
   // repairing the map puts it back
   const repaired = await page.evaluate(() => { game.session.resetMap(); return { top: game.voxels.solidAt(-24, 10, -24), log: game.session.carveLog.length }; });
   if (!repaired.top || repaired.log !== 0) errors.push(`repair failed: ${JSON.stringify(repaired)}`);

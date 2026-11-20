@@ -34,6 +34,17 @@ Pick one on the start menu, or on the **Game** tab of the arm menu. Anyone in th
   - Each round the map is repaired and the next player becomes the giant.
   - Places to hide: houses with attics, chimneys and furniture; a castle with towers and a keep; a hedge maze; a cave hill full of tunnels; a barn with hay stacks; a great hollow tree; hollow logs; bushes, boulders and crates.
 
+### Voice chat
+- On the start menu, press **Turn on microphone** before you enter VR (the browser can only ask for permission there). Press it again to mute. In VR, the arm menu's **Game** tab has a mute button.
+- You hear the others even if your own microphone is off.
+- Voices are full volume within about 3 m, half at 9 m, and gone by 40 m, and they come from the side the speaker is on.
+- Each pair of players is connected directly (WebRTC through PeerJS), so it works best with a handful of players.
+
+### Giants shake the ground
+- A player of 1.5x size or more makes a deep thump when their hands slap down or they land. Everyone hears it by distance and feels it in their controllers when it is close.
+- A giant landing hard cracks the ground under it and knocks a few blocks loose nearby (where smashing is allowed).
+- In hide and seek, a hider's heart starts to pound when the giant comes within 15 m: faster and stronger the closer it gets.
+
 ### Smashing
 Everything except the floor and the outer wall is made of 25 cm blocks and can be broken.
 
@@ -68,7 +79,7 @@ Items: crate, ball, beach ball, barrel, cone, big crate, plank, platform, trampo
 npm install            # installs three.js for the tests
 npm test               # movement physics tests (Node)
 node tests/smoke-browser.cjs        # loads the game in headless Chromium, runs and screenshots it
-node tests/multiplayer-browser.cjs  # two browsers + a local PeerJS server: host, join, sync props
+node tests/multiplayer-browser.cjs  # two browsers + a local PeerJS server: sync, voice (fake microphone), a full hide and seek round
 npm run serve          # http://localhost:8000 for desktop testing
 ```
 
@@ -87,6 +98,7 @@ npm run serve          # http://localhost:8000 for desktop testing
 | `src/props.js` | Physics props (cannon-es): types, spawning, grabbing, syncing |
 | `src/session.js` | Solo and multiplayer play: the map, syncing dents, rounds, other players, requests |
 | `src/net.js` | PeerJS host / join with room codes |
+| `src/voice.js` | Voice chat: one audio call per pair of players, volume and side by distance |
 | `src/armmenu.js` | The arm menu: tabs, buttons you poke, item previews you grab |
 | `src/textures.js` | All textures, painted on canvases at startup (no image files) |
 | `src/sky.js` | Sky dome, sun, clouds, stars; day, sunset and night |

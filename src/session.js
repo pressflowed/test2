@@ -55,8 +55,11 @@ export class Session {
     this.onMap = () => {};      // (mode) a different map is about to be built: swap the scenery
     this.onCarve = () => {};    // (THREE.Vector3, radius, result) blocks broke: debris, sound
     this.onRound = () => {};    // (round, previousRound) the hide and seek state changed
+    this.onThump = () => {};    // (THREE.Vector3, strength 0..1) something huge shook the ground
+    this.peers = new Map();     // other players: id -> PeerJS id, for voice calls
     this._sendT = 0;
     this._buttonT = {};
+    this._headTmp = new THREE.Vector3();
     this._building = false;
     this.voxels.onCells = cells => { if (!this._building) this.props.syncCells(cells); };
 
@@ -111,6 +114,7 @@ export class Session {
   // On my own again: start from a fresh copy of the current map.
   _backToSolo() {
     for (const id of [...this.players.keys()]) this._dropPlayer(id);
+    this.peers.clear();
     this.rounds.stop();
     this.loadMap(this.settings.mode);
     this._applySettings({ ...this.settings, gravity: 'normal', sky: 'day' });
@@ -220,18 +224,25 @@ export class Session {
   }
 
   _broadcastRoster() {
-    if (this.net.role !== 'host') { this.onChange(); return; }
-    const list = [{ id: 'h', name: this.me.name, color: this.me.color }];
-    for (const p of this.players.values()) list.push({ id: p.id, name: p.name, color: p.color });
+    if (this.net.role !== 'host') { this.peers.clear(); this.onChange(); return; }
+    const list = [{ id: 'h', name: this.me.name, color: this.me.color, peer: this.net.peer ? this.net.peer.id : null }];
+    this.peers.clear();
+    for (const p of this.players.values()) {
+      const peer = this.net.peerIdOf(p.id);
+      list.push({ id: p.id, name: p.name, color: p.color, peer });
+      if (peer) this.peers.set(p.id, peer);
+    }
     this.net.broadcast({ t: 'roster', list });
     this.onChange();
   }
 
   _applyRoster(list) {
     const ids = new Set();
+    this.peers.clear();
     for (const r of list) {
       if (r.id === this.myId) continue;
       ids.add(r.id);
+      if (r.peer) this.peers.set(r.id, String(r.peer));
       let p = this.players.get(r.id);
       if (!p) { p = { id: r.id, state: null }; this.players.set(r.id, p); }
       const changed = p.name !== r.name || p.color !== r.color;
@@ -265,6 +276,7 @@ export class Session {
       if (msg.t === 'roster') this._applyRoster(msg.list);
       else if (msg.t === 'map') this._applyMap(msg);
       else if (msg.t === 'carve' && Array.isArray(msg.c)) this._carve(msg.c, true);
+      else if (msg.t === 'thump' && Array.isArray(msg.p)) this.onThump(new THREE.Vector3().fromArray(msg.p), Number(msg.s) || 0);
       else if (msg.t === 'snap') {
         for (const [id, ...s] of msg.players) {
           if (id === this.myId) continue;
@@ -328,6 +340,15 @@ export class Session {
       case 'break': {
         const c = msg.c;
         if (Array.isArray(c) && c.length === 4 && c.every(Number.isFinite) && c[3] <= MAX_PUNCH && this.canBreak(from)) this._hostCarve(c.map(r3), from);
+        break;
+      }
+      case 'thump': {
+        // only big players shake the ground; everyone else gets to feel it
+        const sc = from === this.myId ? (this._local && this._local.scale) || 1 : (this.players.get(from)?.state || [])[21] || 1;
+        if (!Array.isArray(msg.p) || msg.p.length !== 3 || !msg.p.every(Number.isFinite) || sc < 1.5) break;
+        const m = { t: 'thump', p: msg.p.map(r3), s: Math.min(Math.max(Number(msg.s) || 0, 0), 1) };
+        this.net.broadcast(m, from);
+        if (from !== this.myId) this.onThump(new THREE.Vector3().fromArray(m.p), m.s);
         break;
       }
       case 'mode': this._hostSetMode(msg.mode); break;
@@ -436,6 +457,15 @@ export class Session {
   }
 
   pressButton(id) { this.request({ t: 'button', id }); }
+
+  /** Tell everyone the ground just shook here (big players only). strength 0..1 */
+  thump(pos, strength) { this.request({ t: 'thump', p: pos.toArray().map(r3), s: r3(strength) }); }
+
+  /** Where another player's head is right now, or null. */
+  headOf(id) {
+    const p = this.players.get(id);
+    return p && p.cur ? this._headTmp.set(p.cur[0], p.cur[1], p.cur[2]) : null;
+  }
 
   /** Blob-shadow casters for the other players. */
   playerCasters(out) {

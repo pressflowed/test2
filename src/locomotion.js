@@ -70,6 +70,8 @@ export class Locomotion {
     this._ct = new THREE.Vector3();
     this._c = new THREE.Vector3();
     this._before = new THREE.Vector3();
+    this._impact = 0;
+    this._impactCol = null;
     this._bodyCols = [];
     this._handCols = [];
   }
@@ -149,6 +151,7 @@ export class Locomotion {
           if (fixVel) {
             const vn = this.vel.dot(this._n);
             if (vn < 0) {
+              if (this._n.y > 0.6 && -vn > this._impact) { this._impact = -vn; this._impactCol = col; }   // how hard we landed
               // bouncy surfaces (trampolines) throw you back off them
               const bounce = col.bouncy && vn < -1 ? col.bouncy : 0;
               this.vel.addScaledVector(this._n, -vn * (1 + bounce));
@@ -224,6 +227,8 @@ export class Locomotion {
 
     // 1. free motion under gravity (momentum carries through hand contacts)
     this._v0.copy(this.vel);
+    const wasGrounded = this.grounded;
+    this._impact = 0; this._impactCol = null;
     this.grounded = false;
     const steps = Math.min(8, Math.max(1, Math.ceil(this.vel.length() * dt / (0.08 * this.scale))));
     const sdt = dt / steps;
@@ -236,6 +241,10 @@ export class Locomotion {
     if (this.grounded) {
       const f = Math.exp(-c.groundFriction * dt);
       this.vel.x *= f; this.vel.z *= f;
+      // coming down out of the air: report how hard, so big players can shake the ground
+      if (!wasGrounded && this._impact > 1.5 * this.scale) {
+        this.events.push({ type: 'land', speed: this._impact, col: this._impactCol, point: new THREE.Vector3(this.head.x, this.head.y - c.bodyHeight, this.head.z) });
+      }
     }
 
     // 2. hands

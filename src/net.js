@@ -33,10 +33,13 @@ export class Net {
     this.onJoin = () => {};    // host: (playerId)
     this.onLeave = () => {};   // (playerId) ; client gets 'h' when the host is gone
     this.onStatus = () => {};  // (text, kind)
+    this.onCall = () => {};    // (MediaConnection) another player is calling for voice chat
     this._next = 2;
   }
 
   get online() { return this.role !== 'solo'; }
+  /** The PeerJS id of a joined player (host only), for voice calls. */
+  peerIdOf(id) { const c = this.conns.get(id); return c ? c.peer : null; }
   get playerCount() { return this.role === 'host' ? this.conns.size + 1 : this.role === 'client' ? -1 : 1; }
 
   _peer(id) {
@@ -58,6 +61,7 @@ export class Net {
         resolve(code);
       });
       peer.on('connection', conn => this._accept(conn));
+      peer.on('call', call => this.onCall(call));
       peer.on('error', err => {
         if (err.type === 'unavailable-id' && tries > 0) { peer.destroy(); this.host(tries - 1).then(resolve, reject); return; }
         if (this.role !== 'host') { peer.destroy(); this.peer = null; reject(new Error(describe(err))); }
@@ -91,6 +95,7 @@ export class Net {
       let done = false;
       const fail = msg => { if (done) return; done = true; this.leave(); reject(new Error(msg)); };
       const timer = setTimeout(() => fail(`Could not reach room ${code}. Check the code, and that your friend is still hosting.`), 15000);
+      peer.on('call', call => this.onCall(call));
       peer.on('error', err => {
         if (err.type === 'peer-unavailable') fail(`There is no room ${code}. Check the code.`);
         else if (!done) fail(describe(err));

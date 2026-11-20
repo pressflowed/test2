@@ -48,6 +48,7 @@ const LAYOUT = {
     { id: 'mode:sandbox', rect: [20, 105, 395, 150], label: 'Sandbox' },
     { id: 'mode:hideseek', rect: [425, 105, 395, 150], label: 'Hide and seek' },
     { id: 'skip', rect: [520, 450, 300, 130], label: 'Next round' },
+    { id: 'mic', rect: [20, 450, 300, 130] },
   ],
 };
 
@@ -299,6 +300,7 @@ export class ArmMenu {
       });
       g.textAlign = 'center';
       if (s.mode === 'hideseek') button(LAYOUT[3][2], 'Next round');
+      button(LAYOUT[3][3], s.mic || 'Mic off', null, s.mic === 'Mic on');
     }
     this.tex.needsUpdate = true;
   }

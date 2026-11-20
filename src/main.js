@@ -6,7 +6,8 @@ import { Locomotion } from './locomotion.js';
 import { Avatar, BONE, fingertip } from './avatar.js';
 import { DesktopInput } from './input-desktop.js';
 import { VRInput } from './input-vr.js';
-import { initAudio, tap, boom, boing, crunch, jingle } from './audio.js';
+import { initAudio, tap, boom, boing, crunch, jingle, thump, heartbeat } from './audio.js';
+import { Voice } from './voice.js';
 import { buildScenery, lightButton } from './sandbox.js';
 import { PROP_TYPES, propVisual, propSize, BLAST_RADIUS } from './props.js';
 import { Net } from './net.js';
@@ -79,12 +80,19 @@ avatarTemplate
 const net = new Net();
 const session = new Session({ scene, world, net, loco, me, avatarTemplate });
 const armMenu = new ArmMenu(scene);
+const voice = new Voice(net);
 
 const stats = { speed: 0, best: 0, bodyHeight: loco.cfg.bodyHeight, mode: 'desktop' };
 let sizeIdx = SIZES.indexOf(1), powerIdx = POWERS.indexOf(1);
 let calib = 0;            // seconds left on the calibrate countdown (0 = not calibrating)
 let carry = null;         // the mini item in my right hand: { typeId, mesh }
 const lastPunch = [0, 0];
+let lastThump = 0;        // when I last shook the ground (ms), to limit how often
+let beatT = 0;            // seconds until my next heartbeat while the giant is near
+
+// Big players shake the ground. How far it is felt, and how close the giant must be
+// before a hider's heart starts pounding.
+const SHAKE = { minScale: 1.5, soundRange: 45, rumbleRange: 22, heartRange: 15, every: 110 };
 
 // How hard a hit has to be to break something, in metres per second of real hand speed
 // straight into the surface. Hitting downward needs a real slam, so running across the
@@ -215,11 +223,25 @@ function renderRoom() {
       : `You joined. ${session.playerCount} players in the room.`;
   }
   for (const btn of document.querySelectorAll('[data-mode]')) btn.setAttribute('aria-pressed', String(btn.dataset.mode === session.settings.mode));
+  $('mic').textContent = !voice.on ? 'Turn on microphone' : voice.muted ? 'Microphone muted (click to unmute)' : 'Microphone on (click to mute)';
+  $('mic').setAttribute('aria-pressed', String(voice.speaking));
+  $('voice-note').textContent = net.role === 'solo'
+    ? 'Voice chat works once you are in a room with someone.'
+    : `You can hear ${voice.connected} of ${session.playerCount - 1} other player${session.playerCount === 2 ? '' : 's'}. Voices get quieter with distance.`;
   $('mode-note').textContent = session.settings.mode === 'hideseek'
     ? (session.playerCount < 2 ? 'Hide and seek starts when a second player joins. You can explore the map until then.' : 'Rounds run by themselves: one giant, everyone else hides.')
     : 'Build, spawn props and smash things freely.';
 }
-session.onChange = renderRoom;
+session.onChange = () => { renderRoom(); voice.sync(session.peers); };
+voice.onChange = renderRoom;
+// someone huge hit the ground somewhere: hear it, and feel it if it was close
+session.onThump = (pos, strength) => {
+  const d = pos.distanceTo(loco.head);
+  thump(strength * Math.max(0, 1 - d / SHAKE.soundRange) ** 1.5);
+  const near = Math.max(0, 1 - d / SHAKE.rumbleRange);
+  if (near > 0) for (let i = 0; i < 2; i++) vr.pulse(i, Math.min(1, 0.15 + strength * near), 60 + 160 * strength * near);
+  if (strength > 0.5 && d < 30) debris.burst([0, 1, 2, 3].map(() => [pos.x + (Math.random() - 0.5), pos.y + 0.1, pos.z + (Math.random() - 0.5), 0x8a7a5c]), pos, 0.1, GRAVITY[session.settings.gravity]);
+};
 session.onSettings = s => { sky.set(s.sky); applyView(); };
 session.onMap = mode => {
   level.setMap(mode);
@@ -300,7 +322,16 @@ async function joinRoom(code) {
 }
 $('join').addEventListener('click', () => joinRoom(codeInput.value));
 codeInput.addEventListener('keydown', e => { if (e.key === 'Enter') joinRoom(codeInput.value); });
-$('leave').addEventListener('click', () => { session.leave(); renderRoom(); });
+$('leave').addEventListener('click', () => { session.leave(); voice.reset(); renderRoom(); });
+// voice chat: the first click asks for the microphone, later clicks mute and unmute
+async function toggleMic() {
+  if (voice.on) { voice.setMuted(!voice.muted); return; }
+  status('Asking for your microphone...');
+  try { await voice.enable(); status('Microphone on. Friends hear you louder when you are close.', 'ok'); }
+  catch (e) { status(e.name === 'NotAllowedError' ? 'The microphone is blocked. Allow it for this site in the browser, then try again.' : 'Could not use the microphone: ' + e.message, 'error'); }
+}
+$('mic').addEventListener('click', toggleMic);
+function micLabel() { return !voice.on ? 'Mic off' : voice.muted ? 'Mic muted' : 'Mic on'; }
 $('copy').addEventListener('click', async () => {
   const text = $('room-link').textContent;
   try { await navigator.clipboard.writeText(text); status('Link copied.', 'ok'); }
@@ -323,6 +354,12 @@ function menuAction(id) {
     case 'power-': if (free) setPower(powerIdx - 1); break;
     case 'power+': if (free) setPower(powerIdx + 1); break;
     case 'skip': session.skipRound(); break;
+    case 'mic':
+      // the browser can only ask for the microphone from the start menu, not inside VR
+      if (voice.on) voice.setMuted(!voice.muted);
+      else if (!renderer.xr.isPresenting) toggleMic();
+      else hud.flash('Microphone is off', 'Turn it on from the start menu first', 4);
+      break;
     case 'resetmap': session.resetMap(); break;
     case 'smash': session.pressButton(id); break;
     case 'calibrate': calib = 3.99; break;   // counts down so you can put your arms down first
@@ -347,6 +384,40 @@ function tryPunch(e, now) {
   lastPunch[e.hand] = now;
   vr.pulse(e.hand, 1, 90);
   return true;
+}
+
+// Tell everyone the ground shook here (not too often).
+function shake(point, strength, now) {
+  if (loco.scale < SHAKE.minScale || now - lastThump < SHAKE.every) return;
+  lastThump = now;
+  session.thump(point, strength);
+  thump(strength * 0.6);
+}
+
+// A big player came down hard: crack the ground under them and knock a few blocks loose nearby.
+function stomp(e, now) {
+  const s = loco.scale, hard = e.speed / s;            // metres per second, at normal size
+  if (s < SHAKE.minScale || hard < 2.2) return;
+  const power = Math.min((hard - 2.2) / 4, 1);
+  lastThump = 0;
+  shake(e.point, 0.55 + 0.45 * power, now);
+  for (let i = 0; i < 2; i++) vr.pulse(i, 0.5 + 0.5 * power, 120);
+  if (!session.canBreak() || power < 0.25) return;
+  if (e.col && e.col.voxel) session.punch(e.point.clone().setY(e.point.y - 0.1 * s), s * (0.22 + 0.2 * power));
+  // loose blocks: chip the ground around the landing, and any walls close by
+  const from = new THREE.Vector3(), dir = new THREE.Vector3();
+  let chips = 0;
+  for (let n = 0; n < 10 && chips < 2 + Math.round(power * 3); n++) {
+    const a = Math.random() * Math.PI * 2;
+    let hit;
+    if (n % 2) {            // straight down onto a spot a little way off
+      const d = (0.8 + Math.random() * 1.6) * s;
+      hit = voxels.raycast(from.set(e.point.x + Math.cos(a) * d, e.point.y + 2 * s, e.point.z + Math.sin(a) * d), dir.set(0, -1, 0), 5 * s);
+    } else {                // sideways at whatever stands nearby
+      hit = voxels.raycast(from.copy(e.point).setY(e.point.y + 0.4 * s), dir.set(Math.cos(a), Math.random() * 0.6 - 0.1, Math.sin(a)).normalize(), 1.8 * s);
+    }
+    if (hit && session.punch(hit.point.addScaledVector(hit.normal, -0.08), 0.2 + Math.random() * 0.12)) chips++;
+  }
 }
 
 // Desktop: punch whatever is within reach of where you are looking.
@@ -502,6 +573,9 @@ renderer.setAnimationLoop((time, frame) => {
         tap(e.kind, 0.25 + 0.75 * e.strength, e.hand === 0 ? -0.5 : 0.5);
         if (inVR) vr.pulse(e.hand, 0.2 + 0.6 * e.strength, 25 + 40 * e.strength);
         if (e.col && e.col.button) session.pressButton(e.col.button);
+        if (e.strength > 0.45) shake(e.point, 0.2 + 0.3 * e.strength, now);   // a giant's hand slapping down
+      } else if (e.type === 'land') {
+        stomp(e, now);
       } else if (e.type === 'launch') {
         stats.best = Math.max(stats.best, e.speed);
       } else if (e.type === 'pad') {
@@ -547,7 +621,7 @@ renderer.setAnimationLoop((time, frame) => {
     gravity: GRAVITY_LABEL[session.settings.gravity], sky: SKIES[session.settings.sky].label, smash: session.settings.smash,
     room: net.role === 'solo' ? 'Solo' : `Room ${net.code}`, players: session.playerCount,
     calib: calib > 0 ? Math.ceil(calib) : 0,
-    mode: session.settings.mode, locked: !tools, roleLocked: role !== 'free', game: gameLines(),
+    mode: session.settings.mode, locked: !tools, roleLocked: role !== 'free', game: gameLines(), mic: micLabel(),
   });
   if (pressedIds.length && inVR) vr.pulse(1, 0.5, 30);
   for (const id of pressedIds.concat(act.menu)) menuAction(id);
@@ -585,6 +659,22 @@ renderer.setAnimationLoop((time, frame) => {
   }
   session.update(dt, localPose);
 
+  // voices: louder when close, and from the side they are on
+  voice.update(dt, localPose.head.pos, tmpV.set(1, 0, 0).applyQuaternion(localPose.head.quat), id => session.headOf(id));
+
+  // a hider's heart pounds as the giant closes in: faster and harder the nearer it gets
+  if (playing && role === 'hider' && session.round.phase === 'hunt') {
+    const g = session.headOf(session.round.giant);
+    const near = g ? Math.max(0, 1 - g.distanceTo(localPose.head.pos) / SHAKE.heartRange) : 0;
+    beatT -= dt;
+    if (near > 0 && beatT <= 0) {
+      beatT = 1.15 - 0.8 * near;
+      stats.beats = (stats.beats || 0) + 1;
+      heartbeat(0.25 + 0.75 * near);
+      for (let i = 0; i < 2; i++) vr.pulse(i, 0.15 + 0.75 * near, 70);
+    }
+  }
+
   if (avatar) avatar.update(localPose.head.pos, localPose.head.quat, localPose.hands, s);
 
   // soft shadows under props and players
@@ -616,5 +706,5 @@ renderer.setAnimationLoop((time, frame) => {
 window.game = {
   THREE, loco, desktop, vr, renderer, scene, camera, get avatar() { return avatar; }, respawn, playDesktop, stats, session, net, level,
   armMenu, sky, menuAction, setSize, setPower, get carry() { return carry; }, get time() { return gameTime; },
-  voxels, voxelView, world, hud, punchAhead, tryPunch, ROUND,
+  voxels, voxelView, world, hud, punchAhead, tryPunch, ROUND, voice, stomp, SHAKE,
 };
