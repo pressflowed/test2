@@ -173,6 +173,87 @@ const until = (page, fn, arg, ms = 15000) => page.waitForFunction(fn, arg, { tim
     await b.evaluate(() => { game.desktop.keys.KeyG = false; });
     check(await until(a, () => ![...game.session.props.props.values()].some(p => p.held)), 'friend let go of the crate');
 
+    // ---- bodies: bots, punches, torn-off arms and dying are the same for both players
+    await b.evaluate(() => game.setSize(3));
+    const bId = await b.evaluate(() => game.session.myId);
+    for (const pg of [a, b]) await pg.evaluate(() => {
+      window.fx = []; const S = game.session, f = S.onBodyFx;
+      S.onBodyFx = e => { window.fx.push(e.k + ':' + e.id); f(e); };
+      const m = S._onMessage.bind(S); S._onMessage = (from, msg) => { if (msg && msg.t === 'given') window.given = msg; m(from, msg); };
+    });
+    await b.evaluate(() => game.session.addBot());      // the friend asks; the host makes it
+    check(await until(a, () => game.session.botCount === 1 && game.session.bots.size === 1), 'the friend asked for a bot and the host made one');
+    check(await until(b, () => { const p = game.session.players.get('b1'); return p && p.bot && p.avatar && p.avatar.root.visible && game.session.playerCount === 2; }), 'the friend sees the bot, and it is not counted as a player');
+    await a.evaluate(() => { game.session.bots.get('b1').wait = 1e9; });
+    await a.waitForTimeout(1500);
+    const botAt = await a.evaluate(() => game.session.bots.get('b1').loco.head.toArray());
+    await b.evaluate(h => game.loco.teleport(new game.THREE.Vector3(h[0], 0, h[2] + 1)), botAt);
+    await b.waitForTimeout(1500);
+    await b.evaluate(() => game.session.hit('b1', 'head', 30, 1));
+    check(await until(a, () => game.session.body('b1').blood < 80), 'the friend\'s punch hurts the bot on the host');
+    check(await until(b, () => game.session.body('b1').blood < 80 && window.fx.includes('hit:b1') && game.blood.drops.length + game.blood.splats.length > 0), 'and the friend sees it bleed');
+    // the mouse shortcut: the friend takes the bot's arm off, and ends up holding it
+    await b.evaluate(() => game.session.ripArm('b1', 0, 1));
+    check(await until(a, () => game.session.body('b1').cut[0] === 2 && [...game.session.props.props.values()].some(p => p.type.id === 'gib_arm')), 'the friend tore the bot\'s arm off');
+    check(await until(b, () => game.session.body('b1').cut[0] === 2 && !game.session.players.get('b1').avatar.arms[0].upper.g.visible && [...game.session.props.props.values()].some(p => p.type.id === 'gib_arm')), 'the friend sees the arm gone and lying about');
+    check(await until(b, () => window.given && window.given.hand === 1), 'the arm was handed to the friend\'s hand');
+
+    // players can hurt each other: the host punches the friend
+    const bHead = await b.evaluate(() => game.loco.head.toArray());
+    await a.evaluate(h => game.loco.teleport(new game.THREE.Vector3(h[0] + 1, 0, h[2])), bHead);
+    await a.waitForTimeout(1500);
+    await a.evaluate(id => game.session.hit(id, 'torso', 30, 1), bId);
+    check(await until(b, id => game.session.body().blood < 90 && game.hud.blood && window.fx.includes('hit:' + id), bId), 'the host\'s punch hurts the friend, who gets a blood bar');
+    check(await until(a, id => game.session.body(id).blood < 90, bId), 'the host sees the friend hurt');
+    // with fighting switched off players are safe, but bots are not
+    await b.evaluate(() => game.menuAction('pvp'));
+    check(await until(a, () => game.session.settings.pvp === false), 'either player can switch fighting off');
+    check(await until(b, () => game.session.settings.pvp === false), 'and both see it off');
+    const safe = await a.evaluate(async id => {
+      const S = game.session, before = S.body(id).blood, bot = S.body('b1').blood;
+      S.hit(id, 'head', 60, 1); S.hit('b1', 'torso', 20, 1);
+      return { same: S.body(id).blood >= before - 0.5, canHurt: S.canHurt(id), botHurt: S.body('b1').blood < bot };
+    }, bId);
+    check(safe.same && !safe.canHurt && safe.botHurt, `fighting off: players are safe, bots are not (${JSON.stringify(safe)})`);
+    await a.waitForTimeout(700);
+    await a.evaluate(() => game.menuAction('pvp'));
+    check(await until(b, () => game.session.settings.pvp === true), 'fighting back on');
+
+    // the friend takes hold of the host's arm (grip) and pulls it off
+    await a.evaluate(() => { game.desktop.yaw = 0; game.desktop.pitch = 0; });
+    await b.evaluate(() => { game.desktop.yaw = 0; game.desktop.pitch = -0.55; });
+    await b.waitForTimeout(800);
+    const reach = () => b.evaluate(() => { game.loco.origin.add(game.session.rigs.get('h').wrist[0].clone().sub(game.loco.hands[1].pos)); game.loco.vel.set(0, 0, 0); for (const h of game.handHist) h.length = 0; });
+    await reach();
+    await b.waitForTimeout(1500);        // let the host see where the hand went
+    await reach();
+    await b.waitForTimeout(800);
+    await b.evaluate(() => { game.desktop.keys.KeyG = true; });
+    check(await until(a, id => game.session.body().held[0] === id + ':1', bId, 20000), 'the friend has hold of the host\'s left arm');
+    check(await until(b, () => { const h = game.session.holding(1); return h && h.id === 'h' && h.arm === 0; }), 'and knows it');
+    check(await a.evaluate(() => !game.session.body().canUse(0) && game.session.body().canUse(1) && /has your arm/.test(game.hud.title)), 'the host cannot use the held arm, and is told who has it');
+    // pull: straight away from the host's shoulder
+    await b.evaluate(() => { const away = game.loco.hands[1].pos.clone().sub(game.session.rigs.get('h').shoulder[0]).normalize(); game.loco.origin.addScaledVector(away, 1.2); game.loco.vel.set(0, 0, 0); });
+    check(await until(a, () => game.session.body().cut[0] === 2, null, 20000), 'pulled far enough, the host\'s arm tears off');
+    check(await a.evaluate(() => !game.avatar.arms[0].upper.g.visible && game.avatar.arms[1].upper.g.visible && /left arm is gone/.test(game.hud.title) && game.hud.blood.bleeding), 'the host sees and feels it');
+    check(await until(b, () => { const p = game.session.props.props.get(game.session.held[1]); return p && p.type.id === 'gib_arm' && game.session.body('h').cut[0] === 2 && !game.session.players.get('h').avatar.arms[0].upper.g.visible; }), 'the friend is left holding the host\'s arm');
+    await b.evaluate(() => { game.desktop.pitch = -0.2; });
+    await b.waitForTimeout(600);
+    await b.screenshot({ path: path.join(out, 'mp-arm-torn-off.png') });
+    await b.evaluate(() => { game.desktop.keys.KeyG = false; });
+    check(await until(a, () => ![...game.session.props.props.values()].some(p => p.held)), 'letting go drops it');
+
+    // the host kills the friend, who comes back whole at the start
+    await a.evaluate(id => game.session.hit(id, 'head', 250, 1), bId);
+    check(await until(b, () => game.session.body().dead && /You died/.test(game.hud.title) && !game.avatar.root.visible), 'the friend dies');
+    check(await until(a, id => game.session.body(id).dead && !game.session.players.get(id).avatar.root.visible && [...game.session.props.props.values()].some(p => p.type.id === 'gib_head'), bId), 'the host sees the friend fall apart');
+    check(await until(b, () => !game.session.body().dead && game.session.body().blood === 100 && game.avatar.root.visible && Math.hypot(game.loco.head.x, game.loco.head.z - 6) < 3, null, 90000), 'and a few seconds later the friend is back at the start, whole');
+    check(await until(a, id => !game.session.body(id).dead && game.session.players.get(id).avatar.root.visible, bId), 'the host sees the friend again');
+    await a.evaluate(() => game.session.clearBots());
+    check(await until(b, () => game.session.botCount === 0 && !game.session.players.has('b1')), 'clearing the bots removes them for the friend too');
+    await b.evaluate(() => game.setSize(5));
+    await b.waitForTimeout(700);
+
     // both players' skeletons are visible to each other
     check(await until(a, () => [...game.session.players.values()].every(p => p.avatar && p.avatar.root.visible)), 'host draws the friend\'s skeleton');
     check(await until(b, () => [...game.session.players.values()].every(p => p.avatar && p.avatar.root.visible)), 'friend draws the host\'s skeleton');

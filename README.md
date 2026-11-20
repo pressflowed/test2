@@ -2,7 +2,7 @@
 
 A VR tag game where you have no legs: you move by pushing off the world with your hands. It's built with WebXR and Three.js and made for Meta Quest. See [PLAN.md](PLAN.md) for the roadmap.
 
-**Current state: a breakable voxel world with two modes, Sandbox and Hide and seek, solo or online.**
+**Current state: a breakable voxel world with two modes, Sandbox and Hide and seek, solo or online. In the sandbox you have a real body: you can be hurt, lose arms, bleed out and die, and there are dummy bots to try it on.**
 
 **Play:** https://pressflowed.github.io/test2/ (open it in the Meta Quest Browser and press Enter VR, or play on desktop)
 
@@ -25,7 +25,7 @@ It connects you directly (WebRTC through PeerJS's free public server), so there'
 ### Two modes
 Pick one on the start menu, or on the **Game** tab of the arm menu. Anyone in the room can switch.
 
-- **Sandbox:** the original map. Spawn props, build, change your size, and smash things.
+- **Sandbox:** the original map. Spawn props, build, change your size, smash things, and fight (see *Bodies, blood and bots* below).
 - **Hide and seek:** its own big map (Hollow Hamlet), played in rounds that run by themselves once two players are in the room.
   - One player is the **giant** (2x size). Everyone else is a **hider** (0.25x size, 3x power: tiny, but quick for their size).
   - Hiders get 30 seconds to hide while the giant waits in the dark.
@@ -53,22 +53,36 @@ Everything except the floor and the outer wall is made of 25 cm blocks and can b
 - Anything cut off from the ground crumbles. Cut through a pillar and what it held up comes down.
 - In sandbox mode smashing can be switched off, and **Repair map** puts everything back (World tab). TNT leaves craters.
 
+### Bodies, blood and bots
+Sandbox mode only. Everyone has a body of skin and flesh (head, torso and two arms, no legs) with the skeleton's bones inside the arms.
+
+- **Punch** someone with a fast hand to hurt them. Faster punches and bigger players hit harder; bigger bodies shrug more off. Head hits hurt most.
+- **Blood:** you have 100. Wounds bleed for a few seconds and then stop; after 6 quiet seconds blood slowly comes back. A blood bar appears when you are hurt, your view flashes red, and your heart pounds when you are low. At 0 you die, your body falls apart into pieces, and you are back at the start 6 seconds later, whole again.
+- **Arms:** each arm can be punched off, at the elbow or the shoulder (a badly hurt arm shows bone first). Or **grab** it: squeeze grip on someone's arm with a slow hand, then pull. Stretch it about 1.3 arm-lengths from the shoulder and it tears off in your hand; you can throw it or hit things with it. A held arm slips free after 4 seconds.
+- **One arm gone:** you bleed for 12 seconds, then it stops. You live, but you can only push, grab and punch with the arm you have left, and you can only heal back to 85 blood.
+- **Both arms gone:** the bleeding does not stop. You have less than 10 seconds.
+- **TNT** hurts everyone near it and can take arms off.
+- **Bots:** the **Game** tab of the arm menu has **Add bot** (up to 6) and **Clear bots**. They are dummies: they hop around with no plan, flinch when hit, and hop away when you grab them (which is how their arms come off). They can always be hurt.
+- **Fighting** (Game tab) switches whether *players* can hurt each other. It is on to begin with. Turn it off to build in peace; TNT then only throws you around, as before.
+- Body pieces lie around for 45 seconds. They are ordinary props: grab them, throw them.
+
 ### In VR
 - **Move:** push the ground down and back. Fast strokes, then let go, to leap. Push down on walls to climb.
 - **Arm menu:** a panel floats above your left hand. Poke its tabs and buttons with your right fingertip. To open or close it, poke the small **Menu** tab under it, or press **X**.
   - **Items** (sandbox): small 3D previews of everything you can spawn. Reach into one with your right hand, squeeze **grip** to pull it out, and throw it. It grows to full size where it lands.
   - **Player:** your size (0.25x to 3x) and power (0.5x to 3x), height calibration, back to start.
   - **World:** gravity, sky, smashing on/off, repair map, prop rain, balloons, undo, clear props.
-  - **Game:** switch mode, see the round, skip to the next round.
+  - **Game:** switch mode, add or clear bots, fighting on/off, microphone, and (hide and seek) see the round or skip to the next one.
 - **Right hand:** trigger quick-spawns the selected item at your hand. **A** picks the next item, **B** undoes your last spawn, the stick snap-turns.
 - **Left hand:** trigger deletes the prop nearest that hand. **Y** takes you back to the start.
-- **Grip (either hand):** grab a prop; let go to throw it.
+- **Grip (either hand):** grab a prop, or someone's arm; let go to throw it.
 
 Items: crate, ball, beach ball, barrel, cone, big crate, plank, platform, trampoline, TNT (explodes after 4 seconds), balloon (floats away), launch pad (flings you up), super ball, giant ball, domino, bowling pin, dice, tire, anvil, and building pieces that stay where you put them (block, wall, pillar, beam).
 
 ### On desktop (for testing without a headset)
 - Hold **left / right click** and drag the mouse down to push with that hand. **Space** uses both hands.
-- **J** punches whatever you are looking at. **O** switches mode. **K** skips to the next round.
+- **J** punches whoever or whatever you are looking at. **O** switches mode. **K** skips to the next round.
+- **U** adds a bot, **I** clears the bots, **Y** takes an arm off the bot you are looking at (a mouse cannot pull), **0** switches fighting between players on or off.
 - **F** throws the selected item where you look. The wheel or **1–8** pick an item; **,** and **.** change page. **V** quick-spawns, **G** (hold) grabs with the right hand, **X** deletes near it, **Z** undoes.
 - **M** shows or hides the menu, **T** switches tab, **[ ]** change size, **- =** change power, **L** gravity, **N** sky, **H** smashing on/off, **Backspace** repairs the map, **P** prop rain, **B** balloons, **C** clear.
 - The mouse looks around. **Q / E** turn, **R** resets, **Esc** pauses.
@@ -79,6 +93,7 @@ Items: crate, ball, beach ball, barrel, cone, big crate, plank, platform, trampo
 npm install            # installs three.js for the tests
 npm test               # movement physics tests (Node)
 node tests/smoke-browser.cjs        # loads the game in headless Chromium, runs and screenshots it
+node tests/body-browser.cjs         # bots, punches, arms coming off, bleeding out, dying and coming back
 node tests/multiplayer-browser.cjs  # two browsers + a local PeerJS server: sync, voice (fake microphone), a full hide and seek round
 npm run serve          # http://localhost:8000 for desktop testing
 ```
@@ -93,7 +108,11 @@ npm run serve          # http://localhost:8000 for desktop testing
 | `src/maps.js` | The two maps, built from blocks: the sandbox and Hollow Hamlet |
 | `src/rounds.js` | Hide and seek round rules (run by the host) |
 | `src/physics.js` | Collision helpers and the list of unbreakable boxes |
-| `src/avatar.js` | Skeleton body: head follows the headset, IK arms, how the hand sits on the controller (`HAND_FIT`) |
+| `src/avatar.js` | The body you see: head follows the headset, IK arms, how the hand sits on the controller, and how wounds and missing arms are shown |
+| `src/body.js` | The rules for a body: blood, bleeding, arms coming off, dying and coming back. All the numbers are in `BODY` at the top |
+| `src/bodyrig.js` | Where a body's joints are, and what a punch or a grab touched |
+| `src/bots.js` | The dummy bots |
+| `src/gibs.js` | Loose body pieces (they are props) |
 | `src/input-vr.js` / `src/input-desktop.js` | Headset + controllers / mouse + keyboard |
 | `src/props.js` | Physics props (cannon-es): types, spawning, grabbing, syncing |
 | `src/session.js` | Solo and multiplayer play: the map, syncing dents, rounds, other players, requests |
@@ -102,8 +121,13 @@ npm run serve          # http://localhost:8000 for desktop testing
 | `src/armmenu.js` | The arm menu: tabs, buttons you poke, item previews you grab |
 | `src/textures.js` | All textures, painted on canvases at startup (no image files) |
 | `src/sky.js` | Sky dome, sun, clouds, stars; day, sunset and night |
-| `src/fx.js` | Blob shadows, explosion flashes and rubble |
+| `src/fx.js` | Blob shadows, explosion flashes, rubble and blood |
 | `src/sandbox.js` | What cannot be broken: the lawn, the border walls, the sandbox control panel and board |
-| `src/hud.js` | Messages in front of your eyes, the round status line, and the giant's blackout |
-| `assets/skeleton-rig.glb` | The player model, made from `assets/skeleton.glb` by `tools/split_skeleton.py` |
+| `src/hud.js` | Messages in front of your eyes, the round status line, the blood bar, the red flash when hurt, and the giant's blackout |
+| `assets/body-rig.glb` | The player model: flesh from `assets/man.glb` (legs removed, cut into head, torso and arm pieces) with the arm bones from `assets/skeleton-rig.glb` inside. Made by `tools/build_body.py` |
+| `assets/skeleton-rig.glb` | The skeleton, made from `assets/skeleton.glb` by `tools/split_skeleton.py` |
 | `prototype/desktop.html` | The first desktop-only prototype, with the forest arena, bots and infection tag (used in Phase 2) |
+
+## Credits
+
+- Body model: ["Proportional Low Poly Man"](https://sketchfab.com/3d-models/proportional-low-poly-man-free-download-0bfd0e2b49a348a4b64b20cc8196e3b3) by [Robin Butler](https://sketchfab.com/StarTrekGuy), licensed under [CC BY 4.0](http://creativecommons.org/licenses/by/4.0/). Changed for this game: the legs were removed and the body was cut into separate head, torso, arm and hand pieces.

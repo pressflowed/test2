@@ -155,3 +155,42 @@ export function heartbeat(vol = 1) {
     o.connect(g).connect(ac.destination); o.start(t + at); o.stop(t + at + 0.18);
   }
 }
+
+/** A fist landing on a body: a dull wet thud. vol 0..1 */
+export function smack(vol = 1) {
+  if (!ac || vol < 0.02) return;
+  const t = ac.currentTime;
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(150, t);
+  o.frequency.exponentialRampToValueAtTime(55, t + 0.12);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.7 * vol, t + 0.006);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+  o.connect(g).connect(ac.destination); o.start(t); o.stop(t + 0.22);
+  const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g2 = ac.createGain();
+  s.buffer = noise; f.type = 'lowpass'; f.frequency.value = 900;
+  g2.gain.setValueAtTime(0.5 * vol, t); g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+  s.connect(f).connect(g2).connect(ac.destination); s.start(t); s.stop(t + 0.1);
+}
+
+/** Something being torn off: a ripping crackle, then a pop. vol 0..1 */
+export function tear(vol = 1) {
+  if (!ac || vol < 0.02) return;
+  const t = ac.currentTime;
+  for (let i = 0; i < 5; i++) {
+    const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+    s.buffer = noise; f.type = 'bandpass'; f.frequency.value = 500 + i * 380 + Math.random() * 300; f.Q.value = 2.5;
+    const at = t + i * 0.035;
+    g.gain.setValueAtTime(0.6 * vol, at); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.07);
+    s.connect(f).connect(g).connect(ac.destination); s.start(at); s.stop(at + 0.08);
+  }
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(220, t + 0.17);
+  o.frequency.exponentialRampToValueAtTime(60, t + 0.3);
+  g.gain.setValueAtTime(0.0001, t + 0.17);
+  g.gain.exponentialRampToValueAtTime(0.8 * vol, t + 0.178);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+  o.connect(g).connect(ac.destination); o.start(t + 0.17); o.stop(t + 0.42);
+}

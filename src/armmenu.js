@@ -4,7 +4,7 @@
 // spinning previews of everything you can spawn; grab one with your right grip, pull
 // it out and throw it.
 import * as THREE from 'three';
-import { PROP_TYPES, propVisual, propSize } from './props.js';
+import { SPAWNABLE as PROP_TYPES, propVisual, propSize } from './props.js';
 
 const W = 0.28, H = 0.2;          // panel size in metres (for a normal-sized player)
 const CW = 840, CH = 600;         // canvas pixels
@@ -47,7 +47,10 @@ const LAYOUT = {
   3: [
     { id: 'mode:sandbox', rect: [20, 105, 395, 150], label: 'Sandbox' },
     { id: 'mode:hideseek', rect: [425, 105, 395, 150], label: 'Hide and seek' },
-    { id: 'skip', rect: [520, 450, 300, 130], label: 'Next round' },
+    { id: 'addbot', rect: [20, 318, 266, 126], only: 'sandbox' },
+    { id: 'clearbots', rect: [287, 318, 266, 126], label: 'Clear bots', only: 'sandbox' },
+    { id: 'pvp', rect: [554, 318, 266, 126], only: 'sandbox' },
+    { id: 'skip', rect: [520, 450, 300, 130], label: 'Next round', only: 'hideseek' },
     { id: 'mic', rect: [20, 450, 300, 130] },
   ],
 };
@@ -135,7 +138,7 @@ export class ArmMenu {
   // which control is at canvas pixel (px, py)?
   _pick(px, py) {
     for (const b of LAYOUT.tabs) if (inRect(b.rect, px, py)) return b.id;
-    for (const b of LAYOUT[this.tab]) if (inRect(b.rect, px, py)) return b.id;
+    for (const b of LAYOUT[this.tab]) if ((!b.only || b.only === this.mode) && inRect(b.rect, px, py)) return b.id;
     if (this.tab === 0 && !this.locked) {
       for (let i = 0; i < PER_PAGE; i++) {
         const t = PROP_TYPES[this.page * PER_PAGE + i];
@@ -164,6 +167,7 @@ export class ArmMenu {
   update(dt, pose, scale, pointer, state) {
     const pressed = [];
     this.locked = !!state.locked;
+    this.mode = state.mode;
     this.group.position.copy(pose.pos);
     this.group.quaternion.slerp(pose.quat, 1 - Math.exp(-14 * dt));
     this.group.scale.setScalar(scale);
@@ -293,14 +297,24 @@ export class ArmMenu {
     } else {
       button(LAYOUT[3][0], 'Sandbox', null, s.mode === 'sandbox');
       button(LAYOUT[3][1], 'Hide and seek', null, s.mode === 'hideseek');
-      g.textAlign = 'left';
-      (s.game || []).forEach((t, i) => {
-        g.fillStyle = i ? C.ink : C.moss; g.font = `bold ${i ? 34 : 42}px sans-serif`;
-        g.fillText(t, 40, 310 + i * 52);
-      });
-      g.textAlign = 'center';
-      if (s.mode === 'hideseek') button(LAYOUT[3][2], 'Next round');
-      button(LAYOUT[3][3], s.mic || 'Mic off', null, s.mic === 'Mic on');
+      const [addBot, clearBots, pvp, skip, mic] = LAYOUT[3].slice(2);
+      if (s.mode === 'hideseek') {
+        g.textAlign = 'left';
+        (s.game || []).forEach((t, i) => {
+          g.fillStyle = i ? C.ink : C.moss; g.font = `bold ${i ? 34 : 42}px sans-serif`;
+          g.fillText(t, 40, 310 + i * 52);
+        });
+        g.textAlign = 'center';
+        button(skip, 'Next round');
+      } else {
+        // sandbox: dummies to beat up, and whether players can hurt each other
+        g.fillStyle = C.muted; g.font = 'bold 32px sans-serif';
+        g.fillText((s.game || [])[0] || '', CW / 2, 288);
+        button(addBot, 'Add bot', `${s.bots || 0} of ${s.maxBots || 6}`);
+        button(clearBots, 'Clear bots');
+        button(pvp, 'Fighting', s.pvp ? 'On' : 'Off', !!s.pvp);
+      }
+      button(mic, s.mic || 'Mic off', null, s.mic === 'Mic on');
     }
     this.tex.needsUpdate = true;
   }

@@ -124,3 +124,69 @@ export class Debris {
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
   }
 }
+
+/** Blood: droplets that fly and fall, and the splats they leave where they land. Two draw calls. */
+export class Blood {
+  constructor(scene, maxDrops = 260, maxSplats = 200) {
+    this.maxDrops = maxDrops; this.maxSplats = maxSplats;
+    this.drops = []; this.splats = [];
+    const red = new THREE.MeshLambertMaterial({ color: 0xa30f0f });
+    this.dropMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), red, maxDrops);
+    const flat = new THREE.CircleGeometry(1, 7); flat.rotateX(-Math.PI / 2);
+    this.splatMesh = new THREE.InstancedMesh(flat, new THREE.MeshBasicMaterial({ color: 0x5e0808, transparent: true, opacity: 0.9, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 }), maxSplats);
+    for (const m of [this.dropMesh, this.splatMesh]) { m.frustumCulled = false; m.count = 0; scene.add(m); }
+    this._m = new THREE.Matrix4(); this._q = new THREE.Quaternion(); this._s = new THREE.Vector3(); this._p = new THREE.Vector3();
+    this._up = new THREE.Vector3(0, 1, 0);
+  }
+
+  /** Throw `count` droplets from pos, roughly along dir (a unit vector, or null for all round). */
+  spray(pos, dir, count, speed = 2.5, size = 0.02) {
+    for (let n = 0; n < count; n++) {
+      if (this.drops.length >= this.maxDrops) this.drops.shift();
+      const s = speed * (0.4 + Math.random() * 0.9);
+      this.drops.push({
+        x: pos.x, y: pos.y, z: pos.z,
+        vx: (dir ? dir.x * s : 0) + (Math.random() - 0.5) * speed * 0.9,
+        vy: (dir ? dir.y * s : 0) + Math.random() * speed * 0.7,
+        vz: (dir ? dir.z * s : 0) + (Math.random() - 0.5) * speed * 0.9,
+        size: size * (0.6 + Math.random() * 0.8), age: 0,
+      });
+    }
+  }
+
+  /**
+   * @param groundAt (x, y, z) => height of the ground at or below that point
+   */
+  update(dt, gravity, groundAt) {
+    const alive = [];
+    for (const d of this.drops) {
+      d.age += dt;
+      d.vy += gravity * dt;
+      d.x += d.vx * dt; d.y += d.vy * dt; d.z += d.vz * dt;
+      const g = groundAt(d.x, d.y + 0.3, d.z);
+      if (d.y <= g + d.size / 2 && d.vy < 0) {
+        // landed: leave a mark
+        if (this.splats.length >= this.maxSplats) this.splats.shift();
+        this.splats.push({ x: d.x, y: g + 0.012 + Math.random() * 0.004, z: d.z, r: d.size * (2.6 + Math.random() * 3.6), a: Math.random() * 6.28, age: 0, life: 26 + Math.random() * 10 });
+      } else if (d.age < 4) alive.push(d);
+    }
+    this.drops = alive;
+    let n = 0;
+    for (const d of this.drops) {
+      this._m.compose(this._p.set(d.x, d.y, d.z), this._q.identity(), this._s.setScalar(d.size));
+      this.dropMesh.setMatrixAt(n++, this._m);
+    }
+    this.dropMesh.count = n; this.dropMesh.instanceMatrix.needsUpdate = true;
+    n = 0;
+    for (const s of this.splats) s.age += dt;
+    this.splats = this.splats.filter(s => s.age < s.life);
+    for (const s of this.splats) {
+      const k = s.r * Math.min(1, s.age / 0.15) * Math.min(1, (s.life - s.age) / 3);   // spreads fast, dries away slowly
+      this._m.compose(this._p.set(s.x, s.y, s.z), this._q.setFromAxisAngle(this._up, s.a), this._s.set(k, 1, k * 0.8));
+      this.splatMesh.setMatrixAt(n++, this._m);
+    }
+    this.splatMesh.count = n; this.splatMesh.instanceMatrix.needsUpdate = true;
+  }
+
+  clear() { this.drops = []; this.splats = []; }
+}

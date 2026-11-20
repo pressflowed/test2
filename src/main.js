@@ -3,18 +3,22 @@
 import * as THREE from 'three';
 import { World } from './physics.js';
 import { Locomotion } from './locomotion.js';
-import { Avatar, BONE, fingertip } from './avatar.js';
+import { Avatar, SKIN, fingertip } from './avatar.js';
 import { DesktopInput } from './input-desktop.js';
 import { VRInput } from './input-vr.js';
-import { initAudio, tap, boom, boing, crunch, jingle, thump, heartbeat } from './audio.js';
+import { initAudio, tap, boom, boing, crunch, jingle, thump, heartbeat, smack, tear } from './audio.js';
 import { Voice } from './voice.js';
 import { buildScenery, lightButton } from './sandbox.js';
-import { PROP_TYPES, propVisual, propSize, BLAST_RADIUS } from './props.js';
+import { SPAWNABLE, propVisual, propSize, BLAST_RADIUS } from './props.js';
 import { Net } from './net.js';
 import { Session, GRAVITY, GRAVITY_LABEL } from './session.js';
 import { ArmMenu, SIZES, POWERS } from './armmenu.js';
 import { Sky, SKIES } from './sky.js';
-import { BlobShadows, Blasts, Debris } from './fx.js';
+import { BlobShadows, Blasts, Debris, Blood } from './fx.js';
+import { setBodyTemplate } from './gibs.js';
+import { BODY } from './body.js';
+import { RIG, hitPart, grabArm } from './bodyrig.js';
+import { MAX_BOTS } from './bots.js';
 import { VoxelWorld, VOXEL, MATERIALS } from './voxels.js';
 import { VoxelRenderer } from './voxelmesh.js';
 import { MAPS } from './maps.js';
@@ -41,6 +45,7 @@ const sky = new Sky(scene, hemi, sun);
 const shadows = new BlobShadows(scene);
 const blasts = new Blasts(scene);
 const debris = new Debris(scene);
+const blood = new Blood(scene);
 const hud = new Hud(scene);
 
 // the rig is the player's play space; camera and controllers live inside it
@@ -70,12 +75,12 @@ const desktop = new DesktopInput(canvas);
 const vr = new VRInput(renderer, rig);
 desktop.onRespawn = respawn;
 
-const me = { name: saved.name || randomName(), color: saved.color ?? BONE };
-const avatarTemplate = Avatar.loadTemplate('assets/skeleton-rig.glb');
+const me = { name: saved.name || randomName(), color: saved.color ?? SKIN };
+const avatarTemplate = Avatar.loadTemplate('assets/body-rig.glb');
 let avatar = null;
 avatarTemplate
-  .then(t => { avatar = new Avatar(t, scene, { color: me.color }); avatar.firstPerson = true; })
-  .catch(err => { console.error(err); status('Could not load the skeleton model. Movement still works.', 'error'); });
+  .then(t => { setBodyTemplate(t); avatar = new Avatar(t, scene, { color: me.color }); avatar.firstPerson = true; })
+  .catch(err => { console.error(err); status('Could not load the body model. Movement still works.', 'error'); });
 
 const net = new Net();
 const session = new Session({ scene, world, net, loco, me, avatarTemplate });
@@ -98,6 +103,17 @@ const SHAKE = { minScale: 1.5, soundRange: 45, rumbleRange: 22, heartRange: 15, 
 // straight into the surface. Hitting downward needs a real slam, so running across the
 // top of something does not crater it.
 const PUNCH = { hit: 2.6, slam: 4.5, cooldown: 120 };
+
+// Fighting. A hand moving faster than `speed` (m/s, at normal size) that lands on someone
+// is a punch; a slow hand squeezing grip on an arm takes hold of it instead.
+const FIGHT = { speed: 2.2, cooldown: 160, grabReach: 0.13, keyPower: 30 };
+const RIP_LENGTH = (RIG.upper + RIG.fore + RIG.palmOffset) * BODY.ripStretch;   // pull a held arm this far from its shoulder and it tears off
+const touching = [null, null];   // whose body each of my hands is inside right now
+const lastHit = [0, 0];
+const armHold = [null, null];    // the arm each of my hands took hold of with this squeeze: { id, arm }
+let wasDead = false;
+// How much damage a punch does to someone my own size: harder with speed, much harder if I am big.
+const punchPower = (v, s) => Math.min(Math.max((v - 1.5) * 9, 6), 60) * s ** 1.5;
 
 // start near the map's spawn point, spread out a little so friends don't land inside each other
 function respawn() {
@@ -243,8 +259,45 @@ session.onThump = (pos, strength) => {
   if (strength > 0.5 && d < 30) debris.burst([0, 1, 2, 3].map(() => [pos.x + (Math.random() - 0.5), pos.y + 0.1, pos.z + (Math.random() - 0.5), 0x8a7a5c]), pos, 0.1, GRAVITY[session.settings.gravity]);
 };
 session.onSettings = s => { sky.set(s.sky); applyView(); };
+// bodies: blood, noise and feeling it when it happens to me
+session.onBleed = pos => blood.spray(pos, null, 2, 0.7, 0.016);
+session.onBodyFx = e => {
+  if (!e.p) return;
+  const mine = e.id === session.myId, by = e.by === session.myId;
+  const p = new THREE.Vector3().fromArray(e.p);
+  const vol = Math.min(1, 4 / (p.distanceTo(loco.head) + 2));
+  const sc = session.poses.get(e.id)?.scale || 1;
+  const red = '#ff5a4a';
+  if (e.k === 'hit') {
+    const dir = new THREE.Vector3().fromArray(e.d), hard = Math.min(e.dmg, 45) / 45;
+    blood.spray(p, dir, 4 + Math.round(hard * 12), 2.4 * Math.sqrt(sc), 0.019 * sc);
+    smack(vol * (0.45 + 0.55 * hard));
+    if (mine) {
+      hud.hurt(0.35 + 0.6 * hard);
+      loco.vel.addScaledVector(dir, e.push); loco.vel.y += e.push * 0.4;       // knocked back
+      for (let i = 0; i < 2; i++) vr.pulse(i, 0.5 + 0.5 * hard, 120);
+    }
+  } else if (e.k === 'sever') {
+    blood.spray(p, null, 36, 3 * Math.sqrt(sc), 0.021 * sc);
+    tear(vol);
+    if (mine) {
+      const other = session.body().cut[e.arm ? 0 : 1] > 0;
+      hud.hurt(1);
+      hud.flash(`Your ${e.arm ? 'right' : 'left'} ${e.level === 1 ? 'forearm' : 'arm'} is gone!`, other ? 'Both arms gone: you are bleeding out' : 'You can still use the other one', 4, red);
+      for (let i = 0; i < 2; i++) vr.pulse(i, 1, 350);
+    } else if (by) for (let i = 0; i < 2; i++) vr.pulse(i, 0.9, 150);
+  } else if (e.k === 'die') {
+    blood.spray(p, null, 70, 3.6 * Math.sqrt(sc), 0.025 * sc);
+    tear(vol * 0.7); smack(vol);
+    if (!mine && (by || !session.isBot(e.id))) hud.flash(by ? `You killed ${session.nameOf(e.id)}` : `${session.nameOf(e.id)} died`, '', 2.5);
+  } else if (e.k === 'grab' && mine) {
+    hud.flash(`${session.nameOf(e.by)} has your arm!`, 'It tears off if it is pulled too far', 3, red);
+    for (let i = 0; i < 2; i++) vr.pulse(i, 0.8, 200);
+  }
+};
 session.onMap = mode => {
   level.setMap(mode);
+  blood.clear();
   if (carry) { scene.remove(carry.mesh); carry = null; }
   applySizing();
   respawn();
@@ -361,7 +414,9 @@ function menuAction(id) {
       else hud.flash('Microphone is off', 'Turn it on from the start menu first', 4);
       break;
     case 'resetmap': session.resetMap(); break;
-    case 'smash': session.pressButton(id); break;
+    case 'smash': case 'pvp': session.pressButton(id); break;
+    case 'addbot': session.addBot(); break;
+    case 'clearbots': session.clearBots(); break;
     case 'calibrate': calib = 3.99; break;   // counts down so you can put your arms down first
     case 'home': if (free) respawn(); break;
     case 'undo': session.undo(); break;
@@ -420,11 +475,79 @@ function stomp(e, now) {
   }
 }
 
-// Desktop: punch whatever is within reach of where you are looking.
+// My hands against other bodies (sandbox): a fast hand landing on someone is a punch.
+function fight(now) {
+  const s = loco.scale, mine = session.body();
+  for (let i = 0; i < 2; i++) {
+    const hp = localPose.hands[i].pos;
+    let on = null, part = null;
+    if (mine.canUse(i)) for (const [id, rg] of session.rigs) {
+      if (!session.canHurt(id) || rg.head.distanceTo(hp) > 1.3 * (rg.scale + s)) continue;
+      part = hitPart(rg, session.body(id).cut, hp, RIG.handR * s);
+      if (part) { on = id; break; }
+    }
+    // only the moment the hand arrives counts, so resting a hand on someone does nothing
+    if (on && touching[i] !== on && now - lastHit[i] > FIGHT.cooldown && session.held[i] == null && !armHold[i] && !(i === 1 && carry)) {
+      const v = handVelocity(i).length() / s;
+      if (v > FIGHT.speed && v < 30) {      // faster than any arm: that was a teleport, not a punch
+        lastHit[i] = now;
+        session.hit(on, part, punchPower(v, s), i);
+        vr.pulse(i, 1, 90);
+      }
+    }
+    touching[i] = on;
+  }
+}
+
+// Squeezing grip with a slow hand on someone's arm takes hold of it. Returns true if it did.
+function tryHoldArm(i) {
+  const s = loco.scale, hp = localPose.hands[i].pos;
+  if (!session.body().canUse(i) || handVelocity(i).length() / s > FIGHT.speed) return false;
+  for (const [id, rg] of session.rigs) {
+    if (!session.canHurt(id) || rg.head.distanceTo(hp) > 1.3 * (rg.scale + s)) continue;
+    const their = session.body(id), arm = grabArm(rg, their.cut, hp, FIGHT.grabReach * s);
+    if (arm < 0 || their.held[arm]) continue;
+    session.holdArm(id, arm, i);
+    armHold[i] = { id, arm, t: performance.now(), ok: false };
+    return true;
+  }
+  return false;
+}
+
+// Desktop: the bot you are looking at loses an arm (there is no way to pull with a mouse).
+function ripAhead() {
+  const s = loco.scale, dir = new THREE.Vector3(0, 0, -1).applyQuaternion(localPose.head.quat), to = new THREE.Vector3();
+  let best = null, bd = 2.4 * s;
+  for (const [id, rg] of session.rigs) {
+    if (!session.isBot(id) || !session.canHurt(id)) continue;
+    const d = to.copy(rg.torsoTop).sub(localPose.head.pos).length();
+    if (d < bd && to.dot(dir) / d > 0.6) { bd = d; best = id; }
+  }
+  if (!best) return false;
+  const cut = session.body(best).cut, arm = cut[0] <= cut[1] ? 0 : 1;     // the more whole arm first
+  if (cut[arm] >= 2) return false;
+  session.ripArm(best, arm, 1);
+  return true;
+}
+
+// Desktop: punch whoever or whatever is within reach of where you are looking.
 function punchAhead() {
   const s = loco.scale;
-  if (s < 0.7 || !session.canBreak()) return;
   const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(localPose.head.quat);
+  const mine = session.body(), hand = mine.canUse(1) ? 1 : mine.canUse(0) ? 0 : -1;
+  if (hand < 0) return;
+  if (session.settings.mode === 'sandbox') {
+    const p = new THREE.Vector3();
+    for (let d = 0.15; d <= 1.7; d += 0.1) {
+      p.copy(localPose.head.pos).addScaledVector(dir, d * s);
+      for (const [id, rg] of session.rigs) {
+        if (!session.canHurt(id)) continue;
+        const part = hitPart(rg, session.body(id).cut, p, 0.09 * s);
+        if (part) { session.hit(id, part, FIGHT.keyPower * s ** 1.5, hand); return; }
+      }
+    }
+  }
+  if (s < 0.7 || !session.canBreak()) return;
   const hit = voxels.raycast(localPose.head.pos, dir, 1.7 * s);
   if (hit) { const r = 0.42 * s * MATERIALS[hit.mat].hard; session.punch(hit.point.addScaledVector(hit.normal, -r * 0.45), r); }
 }
@@ -442,7 +565,7 @@ function roundStatus() {
   return '';
 }
 function gameLines() {
-  if (session.settings.mode !== 'hideseek') return ['Sandbox', 'Build, spawn props and smash freely.'];
+  if (session.settings.mode !== 'hideseek') return ['Punch, grab and pull arms. Bots are for practice.'];
   const r = session.round;
   if (r.phase === 'waiting') return ['Hide and seek', 'Waiting for another player.', 'Explore the map until then.'];
   const what = { hide: 'hiding', hunt: 'hunting', over: 'over' }[r.phase];
@@ -496,10 +619,24 @@ renderer.setAnimationLoop((time, frame) => {
   const playing = inVR || desktop.enabled;
   let active;
   // what the player asked for this frame
-  const act = { spawn: false, throw: false, next: 0, slot: null, undo: false, del: [false, false], grab: [false, false], grabStart: false, respawn: false, punch: false, menu: [] };
-  const tools = session.settings.mode === 'sandbox';      // spawning and deleting are sandbox-only
+  const act = { spawn: false, throw: false, next: 0, slot: null, undo: false, del: [false, false], grab: [false, false], grabStart: false, respawn: false, punch: false, rip: false, menu: [] };
+  const tools = session.settings.mode === 'sandbox';      // spawning, deleting and fighting are sandbox-only
   const role = session.role();
-  const frozen = role === 'giant' && session.round.phase === 'hide';   // the giant waits, blind, while they hide
+  const waiting = role === 'giant' && session.round.phase === 'hide';   // the giant waits, blind, while they hide
+  const myBody = session.body(), dead = myBody.dead;
+  const frozen = waiting || dead;
+  if (dead !== wasDead) {
+    wasDead = dead;
+    if (dead) {
+      hud.flash('You died', `Back in ${BODY.respawn} seconds`, BODY.respawn, '#ff5a4a');
+      if (carry) { scene.remove(carry.mesh); carry = null; }
+      for (let i = 0; i < 2; i++) vr.pulse(i, 1, 500);
+      jingle([262, 196, 131]);
+    } else {
+      respawn();
+      hud.flash('Back in one piece', '', 2.5, '#9be15d');
+    }
+  }
 
   if (inVR) {
     if (!vr.update(frame)) { renderer.render(scene, camera); return; }
@@ -523,6 +660,7 @@ renderer.setAnimationLoop((time, frame) => {
       const k = c => pressed.has(c);
       act.throw = k('KeyF');
       act.punch = k('KeyJ');
+      act.rip = k('KeyY');
       if (k('KeyO')) session.setMode(tools ? 'hideseek' : 'sandbox');
       if (k('KeyK')) session.skipRound();
       act.spawn = k('KeyV');
@@ -536,7 +674,8 @@ renderer.setAnimationLoop((time, frame) => {
       if (k('Comma')) armMenu.nextPage(-1);
       if (k('Period')) armMenu.nextPage(1);
       for (const [code, id] of [['BracketLeft', 'size-'], ['BracketRight', 'size+'], ['Minus', 'power-'], ['Equal', 'power+'],
-        ['KeyL', 'gravity'], ['KeyN', 'sky'], ['KeyP', 'rain'], ['KeyB', 'balloons'], ['KeyC', 'clear'], ['KeyH', 'smash'], ['Backspace', 'resetmap']]) if (k(code)) act.menu.push(id);
+        ['KeyL', 'gravity'], ['KeyN', 'sky'], ['KeyP', 'rain'], ['KeyB', 'balloons'], ['KeyC', 'clear'], ['KeyH', 'smash'], ['Backspace', 'resetmap'],
+        ['KeyU', 'addbot'], ['KeyI', 'clearbots'], ['Digit0', 'pvp']]) if (k(code)) act.menu.push(id);
     }
     headLocal.copy(desktop.headLocal); headQuatLocal.copy(desktop.headQuat);
     for (let i = 0; i < 2; i++) { handLocals[i].copy(desktop.hands[i].local); handQuatsLocal[i].copy(desktop.hands[i].quat); }
@@ -566,7 +705,8 @@ renderer.setAnimationLoop((time, frame) => {
     }
     // climbable props are part of the world for the movement code
     world.colliders = world.statics.concat(session.propColliders());
-    loco.update(dt, headLocal, handLocals, active);
+    // a hand that is gone, or that someone has hold of, cannot push off anything
+    loco.update(dt, headLocal, handLocals, [active[0] && myBody.canUse(0), active[1] && myBody.canUse(1)]);
     for (const e of loco.events) {
       if (e.type === 'touch') {
         if (e.col.voxel && tryPunch(e, now)) continue;
@@ -601,6 +741,8 @@ renderer.setAnimationLoop((time, frame) => {
   for (let i = 0; i < 2; i++) {
     localPose.hands[i].pos.copy(loco.hands[i].pos);
     localPose.hands[i].quat.copy(rigQuat).multiply(handQuatsLocal[i]);
+    const prev = handHist[i][handHist[i].length - 1];
+    if (prev && prev.p.distanceTo(localPose.hands[i].pos) > 1.2 * s) handHist[i].length = 0;   // teleported: that was not a swing
     handHist[i].push({ p: localPose.hands[i].pos.clone(), t: now });
     while (handHist[i].length > 6) handHist[i].shift();
   }
@@ -622,6 +764,7 @@ renderer.setAnimationLoop((time, frame) => {
     room: net.role === 'solo' ? 'Solo' : `Room ${net.code}`, players: session.playerCount,
     calib: calib > 0 ? Math.ceil(calib) : 0,
     mode: session.settings.mode, locked: !tools, roleLocked: role !== 'free', game: gameLines(), mic: micLabel(),
+    bots: session.botCount, maxBots: MAX_BOTS, pvp: session.settings.pvp,
   });
   if (pressedIds.length && inVR) vr.pulse(1, 0.5, 30);
   for (const id of pressedIds.concat(act.menu)) menuAction(id);
@@ -629,9 +772,11 @@ renderer.setAnimationLoop((time, frame) => {
   if (playing && act.punch && !frozen) punchAhead();
 
   // sandbox actions
-  if (playing && tools) {
-    const n = PROP_TYPES.length;
-    if (act.slot != null) { const t = PROP_TYPES[armMenu.page * 8 + act.slot]; if (t) session.select(t.id); }
+  if (playing && tools && !dead) {
+    fight(now);
+    if (act.rip) ripAhead();
+    const n = SPAWNABLE.length;
+    if (act.slot != null) { const t = SPAWNABLE[armMenu.page * 8 + act.slot]; if (t) session.select(t.id); }
     if (act.next) { session.selected = (session.selected + act.next + n) % n; armMenu.showItem(session.selectedType.id); }
     const fingers = tmpV.copy(tip).sub(rh.pos).normalize();
     // grabbing an item out of the menu takes priority over grabbing a prop
@@ -653,7 +798,18 @@ renderer.setAnimationLoop((time, frame) => {
       const hp = localPose.hands[i].pos;
       if (act.del[i] && session.deleteNear(hp, s) && inVR) vr.pulse(i, 0.5, 60);
       const busy = i === 1 && (carry || overItem);
-      if (act.grab[i] && !busy && session.held[i] == null && session.grab(i, hp, s) && inVR) vr.pulse(i, 0.5, 50);
+      // grip: an arm within reach comes before a prop. One hold per squeeze.
+      if (act.grab[i] && !busy && session.held[i] == null && !armHold[i] && tryHoldArm(i) && inVR) vr.pulse(i, 0.7, 60);
+      if (!act.grab[i] && armHold[i]) { session.letGoArm(i); armHold[i] = null; }
+      const has = armHold[i] ? session.holding(i) : null;
+      if (has) armHold[i].ok = true;
+      else if (armHold[i] && !armHold[i].ok && now - armHold[i].t > 600) armHold[i] = null;   // the host never agreed: this squeeze may try again
+      if (has && inVR) {
+        // feel the arm stretch: the buzz grows until it tears
+        const rg = session.rigs.get(has.id);
+        if (rg) vr.pulse(i, Math.min(1, 0.1 + 0.9 * (hp.distanceTo(rg.shoulder[has.arm]) / (RIP_LENGTH * rg.scale)) ** 2), 30);
+      }
+      if (act.grab[i] && !busy && !armHold[i] && session.held[i] == null && session.grab(i, hp, s) && inVR) vr.pulse(i, 0.5, 50);
       if (!act.grab[i] && session.held[i] != null) session.release(i, handVelocity(i));
     }
   }
@@ -675,20 +831,39 @@ renderer.setAnimationLoop((time, frame) => {
     }
   }
 
-  if (avatar) avatar.update(localPose.head.pos, localPose.head.quat, localPose.hands, s);
+  // my own body: what is left of it, and an arm someone holds goes where they pull it
+  const hurt = myBody.view;
+  if (avatar) {
+    avatar.setBody(hurt);
+    avatar.update(localPose.head.pos, localPose.head.quat, session.hands.get(session.myId) || localPose.hands, s);
+  }
+  hud.blood = tools && (dead || hurt.bleeding || hurt.cut[0] || hurt.cut[1] || hurt.blood < myBody.maxBlood - 0.5)
+    ? { value: hurt.blood, max: myBody.maxBlood, bleeding: !!hurt.bleeding } : null;
+  if (dead) hud.hurt(0.8);
+  else if (hurt.bleeding) hud.hurt((hurt.bleeding & 3) === 3 ? 0.3 : 0.14);
+  // low on blood: your heart hammers
+  if (playing && tools && !dead && hurt.blood < 40) {
+    beatT -= dt;
+    if (beatT <= 0) {
+      beatT = 0.4 + hurt.blood / 70;
+      heartbeat(0.9 - hurt.blood / 80);
+      for (let i = 0; i < 2; i++) vr.pulse(i, 0.5, 60);
+    }
+  }
 
   // soft shadows under props and players
   const casters = session.props.shadowCasters([]);
   session.playerCasters(casters);
-  casters.push({ x: loco.head.x, y: loco.head.y - loco.cfg.bodyHeight * s, z: loco.head.z, r: 0.36 * s });
+  if (!dead) casters.push({ x: loco.head.x, y: loco.head.y - loco.cfg.bodyHeight * s, z: loco.head.z, r: 0.36 * s });
   shadows.update(casters, world.colliders, voxels);
   blasts.update(dt);
   debris.update(dt);
+  blood.update(dt, GRAVITY[session.settings.gravity], (x, y, z) => Math.max(0, voxels.groundBelow(x, y, z)));
   // redraw chunks whose blocks changed: nearest first, one or two per frame (everything after a map change)
   voxelView.update(voxelView.dirty.size > 24 ? 999 : inVR ? 1 : 2, loco.head);
   if (avatar) avatar.setGhost(role === 'ghost');
   hud.status = roundStatus();
-  hud.blind = frozen;
+  hud.blind = waiting;
   hud.update(dt, localPose.head.pos, localPose.head.quat, s);
   sky.update(dt, localPose.head.pos);
 
@@ -707,4 +882,5 @@ window.game = {
   THREE, loco, desktop, vr, renderer, scene, camera, get avatar() { return avatar; }, respawn, playDesktop, stats, session, net, level,
   armMenu, sky, menuAction, setSize, setPower, get carry() { return carry; }, get time() { return gameTime; },
   voxels, voxelView, world, hud, punchAhead, tryPunch, ROUND, voice, stomp, SHAKE,
+  blood, fight, ripAhead, tryHoldArm, punchPower, BODY, FIGHT, RIG, handHist,
 };

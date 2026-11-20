@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { sdBox, near, pushOut } from './physics.js';
 import { texture } from './textures.js';
+import { makeGib } from './gibs.js';
 
 // size: box [x, y, z]; sphere r; cylinder r, h (rTop for cones and pins)
 // climb:  players' hands and bodies collide with it (you can stand on it). Otherwise
@@ -37,7 +38,17 @@ export const PROP_TYPES = [
   { id: 'wall', label: 'Wall', shape: 'box', size: [3, 2, 0.3], mass: 0, color: 0x7b827c, climb: true, fixed: true },
   { id: 'pillar', label: 'Pillar', shape: 'box', size: [0.6, 3, 0.6], mass: 0, color: 0x7b827c, climb: true, fixed: true },
   { id: 'beam', label: 'Beam', shape: 'box', size: [4, 0.3, 0.4], mass: 0, color: 0x8a5e36, climb: true, fixed: true },
+  // body pieces: not in the spawn menu; they appear when someone loses a limb or dies, and fade after a while
+  { id: 'gib_head', label: 'Head', shape: 'sphere', r: 0.11, mass: 4, color: 0xe0ac86, bounce: 0.35, gib: true },
+  { id: 'gib_torso', label: 'Body', shape: 'box', size: [0.42, 0.66, 0.22], mass: 25, color: 0xe0ac86, gib: true },
+  { id: 'gib_arm', label: 'Arm', shape: 'box', size: [0.12, 0.64, 0.12], mass: 4, color: 0xe0ac86, gib: true },
+  { id: 'gib_fore', label: 'Forearm', shape: 'box', size: [0.1, 0.36, 0.1], mass: 2, color: 0xe0ac86, gib: true },
+  { id: 'gib_upper', label: 'Upper arm', shape: 'box', size: [0.12, 0.3, 0.12], mass: 2, color: 0xe0ac86, gib: true },
 ];
+/** What the spawn menu offers. */
+export const SPAWNABLE = PROP_TYPES.filter(t => !t.gib);
+export const GIB_LIFE = 45;   // seconds a body piece lies around
+export const MAX_GIBS = 24;   // more than this and the oldest goes
 export const TYPE = Object.fromEntries(PROP_TYPES.map(t => [t.id, t]));
 
 export const MAX_PROPS = 90;
@@ -72,10 +83,10 @@ export function propVisual(id) {
   return visuals[id];
 }
 
-function makeShape(t) {
-  if (t.shape === 'box') return new CANNON.Box(new CANNON.Vec3(t.size[0] / 2, t.size[1] / 2, t.size[2] / 2));
-  if (t.shape === 'sphere') return new CANNON.Sphere(t.r);
-  return new CANNON.Cylinder(t.rTop ?? t.r, t.r, t.h, 12);
+function makeShape(t, k = 1) {
+  if (t.shape === 'box') return new CANNON.Box(new CANNON.Vec3(t.size[0] * k / 2, t.size[1] * k / 2, t.size[2] * k / 2));
+  if (t.shape === 'sphere') return new CANNON.Sphere(t.r * k);
+  return new CANNON.Cylinder((t.rTop ?? t.r) * k, t.r * k, t.h * k, 12);
 }
 
 const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _n = new THREE.Vector3(), _m3 = new THREE.Matrix3(), _m4 = new THREE.Matrix4();
@@ -151,7 +162,8 @@ export class PropWorld {
   }
 
   // ---- props
-  spawn(typeId, pos, quat, { id, owner = null, vel = null } = {}) {
+  /** scale only applies to body pieces: a giant's arm is a giant arm. */
+  spawn(typeId, pos, quat, { id, owner = null, vel = null, color = 0, scale = 1 } = {}) {
     const t = TYPE[typeId];
     if (!t) return null;
     if (id == null) id = this.nextId++;
@@ -159,20 +171,22 @@ export class PropWorld {
     if (this.props.has(id)) return this.props.get(id);
 
     const { geo, mat } = propVisual(t.id);
-    const mesh = new THREE.Mesh(geo, t.fuse ? mat.clone() : mat);
+    const gib = t.gib ? makeGib(t.id, color || t.color) : null;       // a real body piece, in its owner's skin colour
+    const mesh = gib || new THREE.Mesh(geo, t.fuse ? mat.clone() : mat);
     mesh.position.copy(pos);
     if (quat) mesh.quaternion.copy(quat);
     if (t.fixed) snapYaw(mesh.quaternion);   // keeps the box you stand on matching what you see
-    mesh.scale.setScalar(0.15);
+    const size = t.gib ? Math.min(Math.max(scale || 1, 0.2), 4) : 1;
+    mesh.scale.setScalar(t.gib ? size : 0.15);
     this.scene.add(mesh);
     const p = {
-      id, type: t, owner, mesh, held: null, body: null, grow: 0, fuse: t.fuse || 0,
+      id, type: t, owner, mesh, held: null, body: null, grow: t.gib ? 1 : 0, fuse: t.fuse || 0, color, size, life: t.gib ? GIB_LIFE : Infinity,
       col: t.climb ? { min: new THREE.Vector3(), max: new THREE.Vector3(), delta: new THREE.Vector3(), kind: t.bouncy || t.launch ? 'pad' : 'wood', bouncy: t.bouncy || 0, launch: t.launch || 0, prop: id } : null,
       target: { pos: mesh.position.clone(), quat: mesh.quaternion.clone() },
     };
     if (this.simulate) {
       const b = new CANNON.Body({
-        mass: t.fixed ? 0 : t.mass,
+        mass: t.fixed ? 0 : t.mass * size ** 3,
         type: t.fixed ? CANNON.Body.STATIC : CANNON.Body.DYNAMIC,
         material: t.bouncy ? this.bouncyMat : this.mats[t.id],
         collisionFilterGroup: t.climb ? G_HEAVY : G_LIGHT,
@@ -181,7 +195,7 @@ export class PropWorld {
         sleepSpeedLimit: 0.15, sleepTimeLimit: 0.6,
         allowSleep: !t.float && !t.fuse,
       });
-      b.addShape(makeShape(t));
+      b.addShape(makeShape(t, size));
       b.position.set(pos.x, pos.y, pos.z);
       b.quaternion.set(mesh.quaternion.x, mesh.quaternion.y, mesh.quaternion.z, mesh.quaternion.w);
       if (vel && !t.fixed) b.velocity.set(vel.x, vel.y, vel.z);
@@ -200,6 +214,7 @@ export class PropWorld {
     if (!p) return;
     this.scene.remove(p.mesh);
     if (p.type.fuse) p.mesh.material.dispose();
+    if (p.mesh.userData.dispose) p.mesh.userData.dispose();
     if (p.body) this.world.removeBody(p.body);
     this.props.delete(id);
   }
@@ -223,7 +238,8 @@ export class PropWorld {
       const h = HALF[p.type.id];
       // distance to the prop's (rotated) box
       const local = _v.copy(pos).sub(p.mesh.position).applyQuaternion(_q.copy(p.mesh.quaternion).invert());
-      const dx = Math.max(Math.abs(local.x) - h.x, 0), dy = Math.max(Math.abs(local.y) - h.y, 0), dz = Math.max(Math.abs(local.z) - h.z, 0);
+      const k = p.size;
+      const dx = Math.max(Math.abs(local.x) - h.x * k, 0), dy = Math.max(Math.abs(local.y) - h.y * k, 0), dz = Math.max(Math.abs(local.z) - h.z * k, 0);
       const d = Math.hypot(dx, dy, dz);
       if (d < reach && d < bd) { bd = d; best = p; }
     }
@@ -320,7 +336,7 @@ export class PropWorld {
       p.body.allowSleep = !p.type.float && !p.type.fuse;
       if (!p.type.fixed) {
         p.body.type = CANNON.Body.DYNAMIC;
-        p.body.mass = p.type.mass; p.body.updateMassProperties();
+        p.body.mass = p.type.mass * p.size ** 3; p.body.updateMassProperties();
         if (vel) p.body.velocity.set(vel.x, vel.y, vel.z);
       } else {
         p.body.type = CANNON.Body.STATIC;
@@ -407,7 +423,8 @@ export class PropWorld {
         p.fuse -= dt;
         if (p.fuse <= 0) { const at = p.mesh.position.clone(); this.remove(p.id); this.explode(at); continue; }
       }
-      if (b.position.y < -20 || b.position.y > 90) this.remove(p.id);   // fell out of the world, or floated away
+      if (!p.held) p.life -= dt;
+      if (b.position.y < -20 || b.position.y > 90 || p.life <= 0) this.remove(p.id);   // fell out of the world, floated away, or (body pieces) had its time
       else this._updateCol(p);
     }
   }
@@ -442,7 +459,7 @@ export class PropWorld {
   shadowCasters(out) {
     for (const p of this.props.values()) {
       const h = HALF[p.type.id], c = p.mesh.position;
-      out.push({ x: c.x, y: c.y - (p.col ? (p.col.max.y - p.col.min.y) / 2 : Math.min(h.x, h.y, h.z)), z: c.z, r: Math.max(h.x, h.z) * (p.type.shape === 'box' ? 1.25 : 1.05) });
+      out.push({ x: c.x, y: c.y - (p.col ? (p.col.max.y - p.col.min.y) / 2 : Math.min(h.x, h.y, h.z) * p.size), z: c.z, r: Math.max(h.x, h.z) * p.size * (p.type.shape === 'box' ? 1.25 : 1.05) });
     }
     return out;
   }
@@ -465,13 +482,13 @@ export class PropWorld {
   }
 
   // ---- networking
-  /** Compact state: props as [id, typeIndex, x, y, z, qx, qy, qz, qw, heldKey|0, owner|0, fuse], seeds as [id, typeIndex, x, y, z]. */
+  /** Compact state: props as [id, typeIndex, x, y, z, qx, qy, qz, qw, heldKey|0, owner|0, fuse, colour, size], seeds as [id, typeIndex, x, y, z]. */
   snapshot() {
     const r = v => Math.round(v * 1000) / 1000;
     const props = [], seeds = [];
     for (const p of this.props.values()) {
       const a = p.mesh.position, q = p.mesh.quaternion;
-      props.push([p.id, PROP_TYPES.indexOf(p.type), r(a.x), r(a.y), r(a.z), r(q.x), r(q.y), r(q.z), r(q.w), p.held ? p.held.key : 0, p.owner || 0, r(p.fuse)]);
+      props.push([p.id, PROP_TYPES.indexOf(p.type), r(a.x), r(a.y), r(a.z), r(q.x), r(q.y), r(q.z), r(q.w), p.held ? p.held.key : 0, p.owner || 0, r(p.fuse), p.color || 0, p.size]);
     }
     for (const s of this.seeds.values()) seeds.push([s.id, PROP_TYPES.indexOf(s.type), r(s.pos.x), r(s.pos.y), r(s.pos.z)]);
     return { props, seeds };
@@ -480,11 +497,11 @@ export class PropWorld {
   /** Joined players: make the props match the host's snapshot. */
   applySnapshot(snap) {
     const seen = new Set();
-    for (const [id, ti, x, y, z, qx, qy, qz, qw, heldKey, owner, fuse] of snap.props) {
+    for (const [id, ti, x, y, z, qx, qy, qz, qw, heldKey, owner, fuse, color, size] of snap.props) {
       seen.add(id);
       let p = this.props.get(id);
       const pos = new THREE.Vector3(x, y, z), quat = new THREE.Quaternion(qx, qy, qz, qw);
-      if (!p) p = this.spawn(PROP_TYPES[ti].id, pos, quat, { id, owner: owner || null });
+      if (!p) p = this.spawn(PROP_TYPES[ti].id, pos, quat, { id, owner: owner || null, color: color || 0, scale: size || 1 });
       p.target.pos.copy(pos); p.target.quat.copy(quat);
       p.heldKey = heldKey || null;
       p.fuse = fuse || 0;

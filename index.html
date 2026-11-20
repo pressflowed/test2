@@ -37,6 +37,7 @@ button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
 .mode { flex: 1 1 160px; border: 3px solid transparent; }
 .mode[aria-pressed="true"] { border-color: var(--moss); color: var(--moss); }
 .note { margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.4; }
+.note a { color: var(--ink); }
 #vr:disabled { background: var(--bark-2); color: var(--muted); cursor: default; }
 .roombox { padding: 12px 14px; border-radius: 12px; background: #0d1a13; }
 #room-code { font-size: 34px; font-weight: 900; letter-spacing: .25em; color: var(--moss); }
@@ -66,12 +67,15 @@ details ul { margin: 8px 0 0; padding-left: 20px; line-height: 1.5; }
 <div id="menu">
   <div class="card">
     <h1>Canopy Tag</h1>
-    <p class="sub">No legs: push off the world with your hands. Punch things to smash them. Build in the sandbox, or play hide and seek against a giant.</p>
+    <p class="sub">No legs: push off the world with your hands. Punch things to smash them. Build and fight in the sandbox, or play hide and seek against a giant.</p>
 
     <h2>You</h2>
     <div class="row">
       <input id="name" type="text" maxlength="16" aria-label="Your name" autocomplete="off">
-      <div class="swatches" role="group" aria-label="Skeleton colour">
+      <div class="swatches" role="group" aria-label="Body colour">
+        <button class="swatch" data-color="e0ac86" aria-label="Light skin" type="button"></button>
+        <button class="swatch" data-color="b97a56" aria-label="Tan skin" type="button"></button>
+        <button class="swatch" data-color="7a4a30" aria-label="Brown skin" type="button"></button>
         <button class="swatch" data-color="dcd1a8" aria-label="Bone" type="button"></button>
         <button class="swatch" data-color="e56b5d" aria-label="Red" type="button"></button>
         <button class="swatch" data-color="f0a04b" aria-label="Orange" type="button"></button>
@@ -128,15 +132,18 @@ details ul { margin: 8px 0 0; padding-left: 20px; line-height: 1.5; }
       <ul>
         <li><b>Move:</b> push the ground down and back with your hands. Fast strokes, then let go, to leap. Push down on walls to climb.</li>
         <li><b>Smash:</b> punch something hard and straight on to break a dent in it. Bigger players and harder punches break more. The floor and the outer wall never break.</li>
+        <li><b>Fighting (sandbox):</b> punch someone with a fast hand to hurt them. You have 100 blood; at 0 you die and come back a few seconds later. Arms can be punched off, or torn off: squeeze <b>grip</b> on an arm with a slow hand and pull. With one arm gone you bleed for a while and live on one-handed. With both gone you bleed out fast. TNT hurts too.</li>
+        <li><b>Bots:</b> the arm menu's <b>Game</b> tab has <b>Add bot</b> and <b>Clear bots</b>: dummies to try all this on. <b>Fighting</b> on the same tab switches whether players can hurt each other.</li>
         <li><b>Hide and seek:</b> one player is a giant, everyone else is tiny and fast. Hiders get 30 seconds to hide while the giant waits in the dark. Then the giant hunts: only the giant can smash, and touching a hider catches them. The giant wins by catching everyone; the hiders win if anyone lasts 3 minutes.</li>
         <li><b>Voice chat:</b> turn on your microphone here before entering VR. You hear friends louder when they are close, and from the side they are on. Mute and unmute on the arm menu's Game tab.</li>
         <li><b>Giants shake the ground:</b> you hear and feel a big player's steps from far away, and a hider's heart pounds as the giant gets close. A giant landing hard cracks the ground and knocks blocks loose.</li>
         <li><b>Arm menu:</b> it floats above your left hand. Poke its tabs and buttons with your right fingertip. To open or close it, poke the small <b>Menu</b> tab under it, or press <b>X</b>. The <b>Game</b> tab switches mode.</li>
         <li><b>Sandbox, spawning:</b> on the Items tab, reach into a preview with your right hand, squeeze <b>grip</b> to pull it out, and throw it. Right trigger quick-spawns, <b>A</b> picks the next item, <b>B</b> undoes, left trigger deletes, grip grabs props.</li>
         <li><b>Also:</b> right stick snap-turns, <b>Y</b> takes you back to the start (sandbox).</li>
-        <li><b>Desktop:</b> hold left / right click and drag down to push; Space for both hands. <b>J</b> punches what you look at. O switches mode. F throws the selected item, wheel or 1–8 pick one, V quick-spawns, G (hold) grabs, X deletes, Z undoes. M shows the menu, T switches tab, [ ] size, - = power, L gravity, N sky, H smashing on/off, Backspace repairs the map, Q / E turn, R resets, Esc pauses.</li>
+        <li><b>Desktop:</b> hold left / right click and drag down to push; Space for both hands. <b>J</b> punches who or what you look at. <b>U</b> adds a bot, I clears them, <b>Y</b> takes an arm off the bot you look at, 0 switches fighting on/off. O switches mode. F throws the selected item, wheel or 1–8 pick one, V quick-spawns, G (hold) grabs, X deletes, Z undoes. M shows the menu, T switches tab, [ ] size, - = power, L gravity, N sky, H smashing on/off, Backspace repairs the map, Q / E turn, R resets, Esc pauses.</li>
       </ul>
     </details>
+    <p class="note">Body model: "Proportional Low Poly Man" by Robin Butler (<a href="https://sketchfab.com/StarTrekGuy">sketchfab.com/StarTrekGuy</a>), <a href="http://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>, changed (legs removed, cut into parts).</p>
   </div>
 </div>
 <script type="module" src="src/main.js"></script>

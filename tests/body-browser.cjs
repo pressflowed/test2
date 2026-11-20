@@ -1,0 +1,258 @@
+// Browser test for bodies: bots, punching, losing arms, bleeding out, dying and coming back.
+// Usage: node tests/body-browser.cjs [outDir]
+const { chromium } = require('playwright');
+const http = require('http'), fs = require('fs'), path = require('path');
+
+const root = path.resolve(__dirname, '..');
+const out = path.resolve(process.argv[2] || path.join(root, 'tests', 'out'));
+fs.mkdirSync(out, { recursive: true });
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.glb': 'model/gltf-binary' };
+const server = http.createServer((req, res) => {
+  const file = path.join(root, decodeURIComponent(req.url.split('?')[0]).replace(/\/$/, '/index.html'));
+  fs.readFile(file, (err, buf) => {
+    if (err) { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { 'content-type': TYPES[path.extname(file)] || 'application/octet-stream' });
+    res.end(buf);
+  });
+}).listen(0);
+
+const failures = [];
+const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (!ok) failures.push(what); };
+
+(async () => {
+  const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+  await page.route('https://cdn.jsdelivr.net/npm/**', route => {
+    const m = route.request().url().match(/\/npm\/([^@/]+)@[^/]+\/(.*)$/);
+    route.fulfill({ path: path.join(root, 'node_modules', m[1], m[2]), contentType: 'text/javascript' });
+  });
+  await page.addInitScript(() => { Element.prototype.requestPointerLock = () => Promise.resolve(); });
+  const gameWait = async sec => {
+    const until = (await page.evaluate(() => game.time)) + sec;
+    await page.waitForFunction(t => game.time >= t, until, { timeout: 180000 });
+  };
+  const until = (fn, arg, ms = 60000) => page.waitForFunction(fn, arg, { timeout: ms }).then(() => true, () => false);
+  const shot = async (file, pos, look) => {
+    if (pos) await page.evaluate(([p, l]) => {
+      const cam = new game.THREE.PerspectiveCamera(55, game.camera.aspect, 0.05, 200);
+      cam.position.set(...p); cam.lookAt(...l); game.debugCamera = cam;
+    }, [pos, look]);
+    await page.waitForTimeout(250);
+    await page.screenshot({ path: path.join(out, file) });
+    await page.evaluate(() => { game.debugCamera = null; });
+  };
+
+  try {
+    await page.goto(`http://localhost:${server.address().port}/`);
+    await page.waitForFunction(() => window.game && window.game.avatar, null, { timeout: 30000 });
+    await page.click('#desktop');
+    await gameWait(1);
+    // helpers that live in the page
+    await page.evaluate(() => {
+      const T = game.THREE, S = game.session;
+      game.fx = [];
+      const old = S.onBodyFx; S.onBodyFx = e => { game.fx.push(e); old(e); };
+      game.T = {
+        gibs: () => [...S.props.props.values()].filter(p => p.type.gib).map(p => p.type.id).sort(),
+        // stand in front of a bot and look straight at one of its joints
+        face(id, joint = 'head', dist = 0.9) {
+          const rg = S.rigs.get(id), at = Array.isArray(rg[joint]) ? rg[joint][0] : rg[joint];
+          game.loco.teleport(new T.Vector3(at.x, game.loco.origin.y, at.z + dist));
+          game.aim = at.clone();
+        },
+        look() {     // call a frame after face(): point the camera at the joint
+          const d = game.aim.clone().sub(game.loco.head);
+          game.desktop.yaw = Math.atan2(-d.x, -d.z); game.desktop.pitch = Math.asin(d.y / d.length());
+        },
+        // put my right hand exactly on a point (moves my whole body)
+        handTo(p) { game.loco.origin.add(p.clone().sub(game.loco.hands[1].pos)); game.loco.vel.set(0, 0, 0); for (const h of game.handHist) h.length = 0; },
+        still(id) { const b = S.bots.get(id); b.wait = 1e9; b.loco.vel.set(0, 0, 0); },
+      };
+    });
+
+    // ---- bots
+    const calls0 = await page.evaluate(() => game.renderer.info.render.calls);
+    await page.evaluate(() => { for (let i = 0; i < 3; i++) game.session.addBot(); });
+    check(await until(() => game.session.botCount === 3 && [...game.session.players.values()].every(p => p.avatar && p.pose)), 'three bots appear');
+    const start = await page.evaluate(() => [...game.session.bots.values()].map(b => b.loco.head.toArray()));
+    await gameWait(6);
+    const bots = await page.evaluate(() => [...game.session.bots.values()].map(b => ({ id: b.id, name: b.name, head: b.loco.head.toArray(), grounded: b.loco.grounded })));
+    const wandered = bots.filter((b, i) => Math.hypot(b.head[0] - start[i][0], b.head[2] - start[i][2]) > 0.3).length;
+    check(wandered >= 2, `bots hop about on their own (${wandered} of 3 moved)`);
+    check(bots.every(b => b.head[1] > 0.3 && b.head[1] < 3), `bots stay on the ground: ${JSON.stringify(bots.map(b => +b.head[1].toFixed(2)))}`);
+    check(await page.evaluate(() => game.session.playerCount === 1), 'bots do not count as players');
+    for (const id of ['b1', 'b2', 'b3']) await page.evaluate(i => game.T.still(i), id);
+    await gameWait(1.5);
+    const c = await page.evaluate(() => game.session.rigs.get('b1').head.toArray());
+    console.log('     draw calls:', calls0, 'alone,', await page.evaluate(() => game.renderer.info.render.calls), 'with 3 bots');
+    await shot('body-1-bots.png', [c[0] + 1.6, c[1] + 0.5, c[2] + 2.2], [c[0], c[1] - 0.3, c[2]]);
+
+    // ---- punching (the J key): look at a bot's head and hit it
+    await page.evaluate(() => game.T.face('b1', 'head'));
+    await gameWait(0.3);
+    await page.evaluate(() => { game.T.look(); });
+    await gameWait(0.3);
+    await page.evaluate(() => { game.fx.length = 0; game.punchAhead(); });
+    await gameWait(0.2);
+    let r = await page.evaluate(() => ({ blood: game.session.body('b1').blood, fx: game.fx.map(e => e.k + ':' + (e.part || '')), drops: game.blood.drops.length + game.blood.splats.length, vel: game.session.bots.get('b1').loco.vel.length() }));
+    check(r.blood < 80 && r.fx[0] === 'hit:head', `a punch in the head hurts: blood ${r.blood.toFixed(0)}, ${r.fx}`);
+    check(r.drops > 3, `the hit sprays blood (${r.drops} drops)`);
+    await shot('body-2-punched.png');
+    // wounds bleed for a while, then stop, then the blood comes back
+    await gameWait(5);
+    const low = await page.evaluate(() => game.session.body('b1').blood);
+    check(low < r.blood - 3, `the wound bleeds (${r.blood.toFixed(0)} -> ${low.toFixed(0)})`);
+    await page.evaluate(() => { const b = game.session.body('b1'); b.calm = 100; });
+    await gameWait(2);
+    check(await page.evaluate(l => game.session.body('b1').blood > l + 2, low), 'blood returns after the bleeding stops');
+
+    // ---- arms come off piece by piece under punches
+    await page.evaluate(() => { game.fx.length = 0; game.session.body('b1').blood = 100; game.session.hit('b1', 'foreL', 40, 1); });
+    await gameWait(0.3);
+    r = await page.evaluate(() => ({ cut: game.session.body('b1').cut.slice(), bleeding: game.session.body('b1').bleeding, gibs: game.T.gibs(), fx: game.fx.map(e => e.k), foreShown: game.session.players.get('b1').avatar.arms[0].fore.g.visible, capShown: game.session.players.get('b1').avatar.arms[0].upper.cap.visible }));
+    check(r.cut[0] === 1 && r.bleeding === 1 && r.gibs.includes('gib_fore') && r.fx.includes('sever'), `a hard punch takes the forearm off: ${JSON.stringify(r)}`);
+    check(!r.foreShown && r.capShown, 'the forearm is gone from the body and the stump shows');
+    const b1 = await page.evaluate(() => game.session.rigs.get('b1').head.toArray());
+    await shot('body-3-forearm-off.png', [b1[0] + 0.9, b1[1] + 0.2, b1[2] + 1.3], [b1[0], b1[1] - 0.3, b1[2]]);
+    await page.evaluate(() => { game.session.hit('b1', 'upperL', 50, 1); });
+    await gameWait(0.3);
+    r = await page.evaluate(() => ({ cut: game.session.body('b1').cut.slice(), gibs: game.T.gibs(), max: game.session.body('b1').maxBlood }));
+    check(r.cut[0] === 2 && r.gibs.includes('gib_upper') && r.max === 85, `then the rest of the arm: ${JSON.stringify(r)}`);
+    // one arm gone: it clots and the bot lives
+    await gameWait(14);
+    r = await page.evaluate(() => ({ dead: game.session.body('b1').dead, bleeding: game.session.body('b1').bleeding, blood: game.session.body('b1').blood }));
+    check(!r.dead && r.bleeding === 0 && r.blood > 5, `with one arm gone the bleeding stops and it lives: ${JSON.stringify(r)}`);
+
+    // ---- grab an arm (grip) and it tears off when the bot pulls away
+    await page.evaluate(() => { game.desktop.yaw = 0; game.desktop.pitch = -0.55; });      // hand held low, about where a hanging wrist is
+    await gameWait(0.4);
+    await page.evaluate(() => { game.desktop.keys.KeyG = true; game.T.handTo(game.session.rigs.get('b2').wrist[0]); });
+    check(await until(() => !!game.session.holding(1)), 'squeezing grip on a bot\'s arm takes hold of it');
+    r = await page.evaluate(() => ({ h: game.session.holding(1), d: game.session.rigs.get('b2').hand[0].distanceTo(game.loco.hands[1].pos), punched: game.session.body('b2').blood < 100 }));
+    check(r.h.id === 'b2' && r.h.arm === 0 && r.d < 0.05 && !r.punched, `the held arm follows my hand: ${JSON.stringify(r)}`);
+    await page.evaluate(() => { const b = game.session.bots.get('b2'); b.wait = 0; });     // let it react
+    check(await until(() => game.session.body('b2').cut[0] === 2), 'the bot hops away and its arm tears off');
+    r = await page.evaluate(() => { const id = game.session.held[1], p = game.session.props.props.get(id); return { type: p && p.type.id, held: p && p.held && p.held.key, color: p && p.color, botColor: game.session.colorOf('b2') }; });
+    check(r.type === 'gib_arm' && r.held === 'h:1' && r.color === r.botColor, `the arm stays in my hand, in the bot's skin colour: ${JSON.stringify(r)}`);
+    await shot('body-4-arm-in-hand.png');
+    await page.evaluate(() => { game.desktop.keys.KeyG = false; });
+    check(await until(() => game.session.held[1] == null), 'letting go of grip drops the arm');
+
+    // ---- the mouse shortcut (Y): take both arms, and it bleeds out, dies, and comes back
+    // (the key takes the nearest bot in view, so send the other two well away first)
+    await page.evaluate(() => { ['b1', 'b2'].forEach((id, i) => game.session.bots.get(id).loco.teleport(new game.THREE.Vector3(18 + i * 3, 0.5, 18))); });
+    await gameWait(0.5);
+    await page.evaluate(() => { game.T.still('b3'); game.T.face('b3', 'torsoTop', 1.3); });
+    await gameWait(0.3);
+    await page.evaluate(() => { game.T.look(); });
+    await gameWait(0.3);
+    r = await page.evaluate(() => { const a = game.ripAhead(), b = game.ripAhead(); return { a, b }; });
+    await gameWait(0.3);
+    r = await page.evaluate(() => ({ cut: game.session.body('b3').cut.slice(), bleeding: game.session.body('b3').bleeding, blood: game.session.body('b3').blood }));
+    check(r.cut[0] === 2 && r.cut[1] === 2 && r.bleeding === 3, `both arms off: ${JSON.stringify(r)}`);
+    await gameWait(1.5);
+    const b3 = await page.evaluate(() => game.session.rigs.get('b3').head.toArray());
+    await shot('body-5-no-arms.png', [b3[0] + 0.8, b3[1] + 0.3, b3[2] + 1.5], [b3[0], b3[1] - 0.35, b3[2]]);
+    const t0 = await page.evaluate(() => game.time);
+    check(await until(() => game.session.body('b3').dead, null, 120000), 'with both arms gone it bleeds out and dies');
+    r = await page.evaluate(t => ({ took: game.time - t, gibs: game.T.gibs(), shown: game.session.players.get('b3').avatar.root.visible }), t0);
+    check(r.took < 12, `and quickly (${(r.took + 1.8).toFixed(1)} s)`);
+    check(r.gibs.includes('gib_head') && r.gibs.includes('gib_torso') && !r.shown, `the body falls apart: ${r.gibs}`);
+    await gameWait(0.6);
+    await shot('body-6-dead.png', [b3[0] - 0.4, 2.6, b3[2] + 1.6], [b3[0], 0.2, b3[2]]);
+    check(await until(() => !game.session.body('b3').dead, null, 120000), 'the bot comes back');
+    await gameWait(0.3);
+    r = await page.evaluate(() => ({ cut: game.session.body('b3').cut.slice(), blood: game.session.body('b3').blood, shown: game.session.players.get('b3').avatar.root.visible, arm: game.session.players.get('b3').avatar.arms[0].upper.g.visible }));
+    check(r.cut[0] === 0 && r.cut[1] === 0 && r.blood === 100 && r.shown && r.arm, `whole again: ${JSON.stringify(r)}`);
+
+    // ---- TNT hurts bodies
+    await page.evaluate(() => { game.T.still('b3'); const h = game.session.rigs.get('b3').head; game.loco.teleport(new game.THREE.Vector3(h.x, 0, h.z + 14)); });   // I stand well back
+    await until(() => game.session.bots.get('b3').loco.grounded);       // it drops in from a little way up
+    await gameWait(0.6);
+    await page.evaluate(() => {
+      const S = game.session, h = S.rigs.get('b3').head;
+      S.body('b3').blood = 100;
+      // next to the bot, but not inside anybody else (bodies shove props out of themselves, hard)
+      let spot = null;
+      for (let a = 0; a < 8 && !spot; a++) {
+        const p = new game.THREE.Vector3(h.x + Math.cos(a * 0.785) * 0.9, 0.4, h.z + Math.sin(a * 0.785) * 0.9);
+        if ([...S.rigs].every(([id, r]) => id === 'b3' || Math.hypot(r.head.x - p.x, r.head.z - p.z) > 1)) spot = p;
+      }
+      S.request({ t: 'spawn', type: 'tnt', pos: (spot || new game.THREE.Vector3(h.x + 0.9, 0.4, h.z)).toArray() });
+    });
+    const blown = await until(() => game.session.body('b3').dead || game.session.body('b3').blood < 80, null, 120000);
+    check(blown, 'TNT hurts a bot standing next to it');
+    if (!blown) console.log('     ', JSON.stringify(await page.evaluate(() => ({
+      t: game.time, head: game.session.rigs.get('b3').head.toArray(), body: game.session.body('b3').pack(), fx: game.fx.slice(-6),
+      props: [...game.session.props.props.values()].map(p => [p.type.id, +p.fuse.toFixed(1), p.mesh.position.toArray().map(v => +v.toFixed(1))]),
+    }))));
+
+    // ---- my own body: lose an arm, then the other, bleed out, die, come back
+    await page.evaluate(() => { game.session.clearBots(); game.respawn(); game.desktop.yaw = 0; game.desktop.pitch = -0.6; });
+    await gameWait(1);
+    check(await page.evaluate(() => game.session.botCount === 0 && game.session.players.size === 0), 'clearing bots removes them');
+    check(await page.evaluate(() => game.hud.blood === null), 'no blood bar while unhurt');
+    await page.evaluate(() => { const S = game.session; game.fx.length = 0; S._bodyEvents('h', S.body().hit('torso', 30), { by: 0, dir: new game.THREE.Vector3(0, 0, 1), push: 2 }); });
+    await gameWait(0.1);
+    r = await page.evaluate(() => ({ bar: game.hud.blood, pain: game.hud.pain, vz: game.loco.vel.z }));
+    check(r.bar && r.bar.value < 100 && r.pain > 0.2, `being hit shows the blood bar and flashes red: ${JSON.stringify(r)}`);
+    await page.evaluate(() => { const S = game.session; S._bodyEvents('h', S.body().sever(0, 2), { by: 0 }); });
+    await gameWait(0.5);
+    // a stroke with the missing hand does nothing; the other one still works
+    const stroke = async hand => {
+      const z0 = await page.evaluate(() => game.loco.head.z);
+      for (let n = 0; n < 2; n++) {
+        await page.evaluate(h => { game.desktop.grab(h, 1); }, hand);
+        for (let i = 0; i < 10; i++) { await page.evaluate(() => { game.desktop.dy += 34; }); await page.waitForTimeout(16); }
+        await page.evaluate(h => { game.desktop.hands[h].held = 0; }, hand);
+        await page.waitForTimeout(350);
+      }
+      return z0 - await page.evaluate(() => game.loco.head.z);
+    };
+    await page.evaluate(() => { game.desktop.pitch = -0.5; });
+    const gone = await stroke(0), left = await stroke(1);
+    check(Math.abs(gone) < 0.3 && left > 0.5, `only the arm I still have moves me (lost arm ${gone.toFixed(2)} m, other arm ${left.toFixed(2)} m)`);
+    r = await page.evaluate(() => ({ arm: game.avatar.arms[0].upper.g.visible, other: game.avatar.arms[1].upper.g.visible, bar: game.hud.blood, title: game.hud.title }));
+    check(!r.arm && r.other && r.bar.max === 85 && /left arm is gone/.test(r.title), `my arm is gone from my body: ${JSON.stringify(r)}`);
+    await page.evaluate(() => { game.desktop.pitch = -0.9; });
+    await gameWait(0.3);
+    await shot('body-7-my-arm-gone.png');
+    await page.evaluate(() => { const S = game.session; S._bodyEvents('h', S.body().sever(1, 1), { by: 0 }); });
+    check(await until(() => game.session.body().dead, null, 120000), 'with both arms gone I bleed out');
+    await gameWait(0.3);
+    r = await page.evaluate(() => ({ title: game.hud.title, body: game.avatar.root.visible, gibs: game.T.gibs(), pain: game.hud.pain }));
+    check(/You died/.test(r.title) && !r.body && r.gibs.includes('gib_head') && r.pain > 0.5, `I die: ${JSON.stringify(r)}`);
+    await shot('body-8-dead.png');
+    const z1 = await page.evaluate(() => game.loco.head.toArray());
+    check(await until(() => !game.session.body().dead, null, 120000), 'and come back a few seconds later');
+    await gameWait(0.5);
+    r = await page.evaluate(() => ({ cut: game.session.body().cut.slice(), blood: game.session.body().blood, body: game.avatar.root.visible, arm: game.avatar.arms[0].upper.g.visible, bar: game.hud.blood, head: game.loco.head.toArray() }));
+    check(r.cut[0] === 0 && r.cut[1] === 0 && r.blood === 100 && r.body && r.arm && r.bar === null, `in one piece: ${JSON.stringify(r)}`);
+    check(Math.hypot(r.head[0], r.head[2] - 6) < 3, 'back at the start');
+
+    // ---- no bots or fighting in hide and seek
+    await page.evaluate(() => { game.session.addBot(); });
+    await gameWait(0.3);
+    await page.evaluate(() => game.session.setMode('hideseek'));
+    await gameWait(0.5);
+    check(await page.evaluate(() => game.session.botCount === 0), 'bots leave when hide and seek starts');
+    await page.evaluate(() => { game.session.addBot(); });
+    await gameWait(0.3);
+    check(await page.evaluate(() => game.session.botCount === 0), 'and cannot be added there');
+    await page.evaluate(() => game.session.setMode('sandbox'));
+    await gameWait(0.5);
+    // the arm menu's game tab, with its bot buttons
+    await page.evaluate(() => { game.session.addBot(); game.armMenu.visible = true; game.armMenu.tab = 3; game.desktop.pitch = -0.1; });
+    await gameWait(0.4);
+    await shot('body-9-menu.png');
+    check(errors.length === 0, `no errors on the page ${errors.join(' | ')}`);
+  } finally {
+    await browser.close();
+    server.close();
+  }
+  console.log(failures.length ? `\n${failures.length} failed` : '\nall passed');
+  process.exit(failures.length ? 1 : 0);
+})().catch(e => { console.error(e); server.close(); process.exit(1); });
