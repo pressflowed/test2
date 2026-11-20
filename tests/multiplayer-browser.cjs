@@ -78,7 +78,7 @@ const until = (page, fn, arg, ms = 15000) => page.waitForFunction(fn, arg, { tim
     check(await until(a, () => game.voice.connected === 1, null, 30000), 'the host has a voice link to the friend');
     check(await until(b, () => game.voice.connected === 1, null, 30000), 'the friend has a voice link to the host');
     check(await a.evaluate(() => !game.voice.on), 'no microphone is used until you turn it on');
-    await a.click('#mic');
+    await a.evaluate(() => document.getElementById('mic').click());   // the start menu is hidden while playing
     check(await until(a, () => game.voice.speaking && document.getElementById('mic').textContent.includes('Microphone on')), 'the host turned the microphone on from the menu');
     const hears = page => until(page, () => { for (const c of game.voice.calls.values()) if (c.level > 0.02) return true; return false; }, null, 30000);
     check(await hears(b), 'the friend receives the host\'s voice');
@@ -97,9 +97,9 @@ const until = (page, fn, arg, ms = 15000) => page.waitForFunction(fn, arg, { tim
     await friendAt(0, 34);
     v = await heard();
     check(v.volume < 0.05, `34 m away: almost silent (${JSON.stringify(v)})`);
-    await a.click('#mic');
+    await a.evaluate(() => document.getElementById('mic').click());   // the start menu is hidden while playing
     check(await a.evaluate(() => game.voice.muted && !game.voice.mic.getAudioTracks()[0].enabled), 'clicking again mutes the microphone');
-    await a.click('#mic');
+    await a.evaluate(() => document.getElementById('mic').click());   // the start menu is hidden while playing
     await friendAt(2, 2);
 
     // ---- big players shake the ground: others hear and feel it; small players do not shake anything
