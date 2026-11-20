@@ -87,7 +87,7 @@ npm run serve          # http://localhost:8000 for desktop testing
 
 | File | What it does |
 |---|---|
-| `src/locomotion.js` | The arm-push movement. All the feel settings are in `DEFAULTS` at the top. |
+| `src/locomotion.js` | The arm-push movement. All the feel settings are in `DEFAULTS` at the top (`gripBrake` is how hard a still hand stops you). |
 | `src/voxels.js` | The breakable world: a grid of 25 cm blocks, dents, collapse, collision boxes |
 | `src/voxelmesh.js` | Draws the voxel world, one mesh per 8 m chunk, shaded under roofs |
 | `src/maps.js` | The two maps, built from blocks: the sandbox and Hollow Hamlet |

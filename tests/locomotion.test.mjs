@@ -246,3 +246,47 @@ test('a hard landing is reported, a gentle step is not', () => {
   assert.ok(lands[0].speed > 7 && lands[0].speed < 10, `impact speed ${lands[0].speed}`);
   assert.ok(Math.abs(lands[0].point.y) < 0.05, `at the feet: ${lands[0].point.y}`);
 });
+
+test('a hand held still on the ground grips: you stop instead of sliding like on ice', () => {
+  const loco = setup();
+  run(loco, 150, rest(), [false, false]);
+  // sliding forward with the body held up on the hands, hands not moving
+  loco.vel.set(0, 0, -5);
+  loco.origin.y += 0.3;
+  const planted = [V(-0.25, -1.08, -0.3).add(HEAD), V(0.25, -1.08, -0.3).add(HEAD)];
+  const z0 = loco.head.z;
+  run(loco, 36, planted);   // half a second
+  assert.ok(Math.hypot(loco.vel.x, loco.vel.z) < 0.2, `stopped: ${Math.hypot(loco.vel.x, loco.vel.z)} m/s`);
+  assert.ok(z0 - loco.head.z < 1.3, `slid ${(z0 - loco.head.z).toFixed(2)} m`);
+  const z1 = loco.head.z;
+  run(loco, 72, planted);
+  assert.ok(Math.abs(loco.head.z - z1) < 0.02, 'and stays put');
+});
+
+test('a hand that is moving does not brake you', () => {
+  const loco = setup();
+  run(loco, 150, rest(), [false, false]);
+  loco.vel.set(0, 0, -5);
+  loco.origin.y += 0.3;
+  // hands dragging on the ground while moving back at 1.5 m/s, slower than the body is going
+  const at = z => [V(-0.25, -1.08, z).add(HEAD), V(0.25, -1.08, z).add(HEAD)];
+  loco.update(DT, HEAD, at(-0.5), [false, false]);   // hands in place before they touch down
+  loco.vel.set(0, 0, -5);
+  for (let i = 0; i < 28; i++) {
+    const z = -0.5 + i * 1.5 * DT;
+    loco.update(DT, HEAD, [V(-0.25, -1.08, z).add(HEAD), V(0.25, -1.08, z).add(HEAD)], [true, true]);
+  }
+  assert.ok(-loco.vel.z > 4.5, `still moving at ${-loco.vel.z} m/s`);
+});
+
+test('hands held still on a wall hold you up', () => {
+  const loco = setup(w => w.addBox(0, 0, -1.0, 6, 8, 0.6, 'rock'));   // wall face at z = -0.7
+  loco.teleport(V(0, 2, 0));
+  // start in the air with both hands pressed into the wall
+  const hold = [V(-0.25, -0.2, -0.85).add(HEAD), V(0.25, -0.2, -0.85).add(HEAD)];
+  run(loco, 20, hold);
+  const y0 = loco.head.y;
+  run(loco, 144, hold);    // two seconds
+  assert.ok(loco.hands[0].pinned && loco.hands[1].pinned, 'still holding on');
+  assert.ok(y0 - loco.head.y < 0.15, `slipped ${(y0 - loco.head.y).toFixed(2)} m`);
+});

@@ -7,10 +7,10 @@
 //   2. Each hand sweeps toward its target. If it hits a surface, it stays pinned
 //      there until the real hand lifts off that surface.
 //   3. Pinned hands push the rig by (pinned point - target), so moving a pinned
-//      hand down and back moves your body up and forward. A planted hand never
-//      slows you down: if it would, it skids along the surface instead (handBrake
-//      sets how much grip it keeps against your momentum; 0 = none), so touches
-//      keep your speed and hands only ever add to it.
+//      hand down and back moves your body up and forward. A hand that is moving
+//      never slows you down: if it would, it skids along the surface instead, so
+//      strokes keep your speed and only ever add to it. A hand you hold still
+//      grips after a moment (gripBrake), so you can stop, stand and hang on.
 //   4. When the last hand lets go, the rig keeps the average velocity of the last
 //      few frames, with a boost. That is what turns fast strokes into leaps.
 import * as THREE from 'three';
@@ -26,7 +26,11 @@ export const DEFAULTS = {
   handR: 0.07,
   maxReach: 1.15,      // a pinned hand lets go if it ends up this far from the head
   stickTol: 0.002,     // how far a hand may lift off a surface before it lets go
-  handBrake: 0,        // how fast a planted hand can slow you along a surface, m/s per second (0 = never)
+  handBrake: 0,        // how fast a moving hand can slow you along a surface, m/s per second (0 = never)
+  gripBrake: 28,       // how fast a hand held still slows you, m/s per second
+  stillSpeed: 0.4,     // a hand moving slower than this (m/s, your real hand) counts as held still
+  gripDelay: 0.05,     // seconds a hand must be still before it starts to grip...
+  gripRamp: 0.12,      // ...and how long it takes to reach full grip
   maxPush: 0.25,       // max distance hands can move the body in one frame
   jumpMult: 1.25,      // boost applied to the release velocity
   multThreshold: 1.0,  // only boost releases faster than this (m/s)
@@ -60,6 +64,9 @@ export class Locomotion {
       col: null,
       normal: new THREE.Vector3(),
       ready: false,
+      last: new THREE.Vector3(),    // where the real hand was last frame (rig space)
+      still: 0,                     // seconds it has been held still
+      grip: 0,                      // 0 = skids freely, 1 = holds
     }));
     this._start = new THREE.Vector3();
     this._push = new THREE.Vector3();
@@ -207,7 +214,9 @@ export class Locomotion {
       const braking = -c.dot(mom);                      // how much of c opposes the momentum
       if (braking > 0) {
         const cancel = Math.min(braking, speed * dt);   // beyond this the hand is actively pushing
-        const skid = cancel - Math.min(cancel, this.cfg.handBrake * dt * dt);
+        // a moving hand skids; a hand held still digs in
+        const brake = (this.cfg.handBrake + (this.cfg.gripBrake - this.cfg.handBrake) * h.grip) * this.scale;
+        const skid = cancel - Math.min(cancel, brake * dt * dt);
         if (skid > 0) { c.addScaledVector(mom, skid); h.pos.addScaledVector(mom, skid); }
       }
     }
@@ -255,7 +264,13 @@ export class Locomotion {
       if (!h.ready) {
         h.pos.copy(h.target); this._pushOutAll(h.pos, c.handR);
         h.ready = true;
+        h.last.copy(handLocals[h.index]); h.still = 0;
       }
+      // is the real hand being held still? (measured in the play space, so sliding along does not count as moving)
+      const handSpeed = h.last.distanceTo(handLocals[h.index]) / Math.max(dt, 1e-4);
+      h.last.copy(handLocals[h.index]);
+      h.still = handSpeed < c.stillSpeed ? h.still + dt : 0;
+      h.grip = Math.min(Math.max((h.still - c.gripDelay) / c.gripRamp, 0), 1);
       if (!handActive[h.index]) {
         h.pinned = false;
         h.pos.copy(h.target); this._pushOutAll(h.pos, c.handR);
