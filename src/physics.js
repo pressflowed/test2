@@ -3,17 +3,29 @@ import * as THREE from 'three';
 
 export class World {
   constructor() {
-    this.colliders = [];
+    this.statics = [];     // permanent level boxes (floor, border walls, ...)
+    this.colliders = [];   // boxes checked every time: statics plus whatever the game adds (props)
+    this.voxels = null;    // optional destructible VoxelWorld
+    this._out = [];
   }
-  /** Add a box by its centre x/z, bottom y and size. Returns the collider. */
+  /** Add a permanent box by its centre x/z, bottom y and size. Returns the collider. */
   addBox(cx, by, cz, w, h, d, kind = 'wood') {
     const c = {
       min: new THREE.Vector3(cx - w / 2, by, cz - d / 2),
       max: new THREE.Vector3(cx + w / 2, by + h, cz + d / 2),
       kind,
     };
+    this.statics.push(c);
     this.colliders.push(c);
     return c;
+  }
+  /** Every box that a sphere at p with radius r might touch. `out` is cleared and reused. */
+  query(p, r, out = this._out) {
+    out.length = 0;
+    const list = this.colliders;
+    for (let i = 0; i < list.length; i++) if (near(p, list[i], r)) out.push(list[i]);
+    if (this.voxels) this.voxels.near(p, r, out);
+    return out;
   }
 }
 

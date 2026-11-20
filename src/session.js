@@ -1,13 +1,18 @@
-// Ties the sandbox together for solo and multiplayer play: props, other players,
-// grabbing, the control panel buttons and shared settings.
+// Ties the game together for solo and multiplayer play: the map, breaking it, props,
+// other players, hide and seek rounds, and shared settings.
 //
-// The host (or a solo player) owns the truth: it runs the prop physics, applies
-// everyone's requests (spawn, grab, delete, buttons) and sends snapshots 20 times a
-// second. Joined players send their own head and hand poses and draw what the host
-// says.
+// The host (or a solo player) owns the truth: it runs the prop physics and the round
+// rules, applies everyone's requests and sends snapshots 20 times a second. Joined
+// players send their own head and hand poses and draw what the host says.
+//
+// Broken blocks are the one thing each player works out for themselves: a punch is
+// just "a ball of this size at this spot", and the voxel world gives the same result
+// for the same punches on every machine, in any order.
 import * as THREE from 'three';
 import { PropWorld, PROP_TYPES, TYPE } from './props.js';
 import { Avatar } from './avatar.js';
+import { MAPS } from './maps.js';
+import { Rounds } from './rounds.js';
 
 const SEND_EVERY = 0.05;     // 20 Hz
 const STATE_LEN = 22;        // head pos+quat (7), two hands pos+quat (14), size (1)
@@ -15,38 +20,50 @@ export const GRAVITY = { normal: -9.8, low: -3.2, high: -19 };
 export const GRAVITY_LABEL = { normal: 'Normal', low: 'Low', high: 'Heavy' };
 const GRAVITY_ORDER = ['normal', 'low', 'high'];
 const SKY_ORDER = ['day', 'sunset', 'night'];
+const MAX_PUNCH = 1.5;       // biggest dent a player may ask for, metres
+const BLAST_DENT = 1.6;      // crater from TNT
+const r3 = v => Math.round(v * 1000) / 1000;
 
 export class Session {
   /**
-   * @param opts.scene, opts.world (level World), opts.net (Net), opts.loco (local Locomotion)
+   * @param opts.scene, opts.world (World with .voxels), opts.net (Net), opts.loco (local Locomotion)
    * @param opts.me  { name, color }
    * @param opts.avatarTemplate  Promise of the skeleton model
    */
   constructor({ scene, world, net, loco, me, avatarTemplate }) {
     this.scene = scene;
     this.world = world;
-    this.levelColliders = world.colliders.slice();
+    this.voxels = world.voxels;
     this.net = net;
     this.loco = loco;
     this.me = me;
-    this.settings = { gravity: 'normal', sky: 'day' };
+    this.settings = { gravity: 'normal', sky: 'day', smash: true, mode: 'sandbox' };
+    this.mode = null;           // the map that is loaded
+    this.carveLog = [];         // every dent since the map was fresh, for players who join later
+    this.rounds = new Rounds();
+    this.round = this.rounds.public();
     this.players = new Map();   // id -> { name, color, state: Float32 array, avatar, cur }
     this.template = null;
     avatarTemplate.then(t => { this.template = t; for (const p of this.players.values()) this._ensureAvatar(p); });
-    this.props = new PropWorld(scene, this.levelColliders, true);
+    this.props = new PropWorld(scene, world, true);
     this.held = [null, null];   // prop id held by my left / right hand
     this.selected = 0;          // index into PROP_TYPES
     this.onChange = () => {};   // roster / room / settings changed
     this.onButton = () => {};   // (buttonId, on) for panel lights
     this.onBoom = () => {};     // (THREE.Vector3) an explosion went off
-    this.onSettings = () => {}; // (settings) gravity or sky changed
+    this.onSettings = () => {}; // (settings) gravity, sky or smash changed
+    this.onMap = () => {};      // (mode) a different map is about to be built: swap the scenery
+    this.onCarve = () => {};    // (THREE.Vector3, radius, result) blocks broke: debris, sound
+    this.onRound = () => {};    // (round, previousRound) the hide and seek state changed
     this._sendT = 0;
     this._buttonT = {};
+    this._building = false;
+    this.voxels.onCells = cells => { if (!this._building) this.props.syncCells(cells); };
 
     net.onMessage = (from, msg) => this._onMessage(from, msg);
     net.onJoin = id => { this.players.set(id, { id, name: 'Player', color: 0xdcd1a8, state: null }); this._broadcastRoster(); };
     net.onLeave = id => {
-      if (id === 'h' && this.net.role !== 'host') { this._resetWorld(true); this.onChange(); return; }
+      if (id === 'h' && this.net.role !== 'host') { this._backToSolo(); return; }
       this._dropPlayer(id);
       for (const p of this.props.props.values()) if (p.held && p.held.key.startsWith(id + ':')) this.props.release(p.id);
       this._broadcastRoster();
@@ -57,28 +74,49 @@ export class Session {
   get isAuthority() { return this.net.role !== 'client'; }
   get selectedType() { return PROP_TYPES[this.selected]; }
   get playerCount() { return this.players.size + 1; }
+  nameOf(id) { return id === this.myId ? this.me.name : (this.players.get(id)?.name || 'Someone'); }
+
+  /** What I am right now: 'free' (no round), 'giant', 'hider', or 'ghost' (caught). */
+  role(id = this.myId) {
+    const r = this.round;
+    if (this.settings.mode !== 'hideseek' || r.phase === 'waiting') return 'free';
+    if (r.giant === id) return 'giant';
+    return r.out.includes(id) ? 'ghost' : 'hider';
+  }
 
   // ---- rooms
   async host() {
     const code = await this.net.host();
-    this._resetWorld(true);
+    for (const id of [...this.players.keys()]) this._dropPlayer(id);
     this.onChange();
     return code;
   }
 
   async join(code) {
-    this._resetWorld(false);
+    for (const id of [...this.players.keys()]) this._dropPlayer(id);
+    this._newProps(false);
+    this._setRound(new Rounds().public());
     try {
       await this.net.join(code);
     } catch (e) {
-      this._resetWorld(true);
+      this._backToSolo();
       throw e;
     }
     this.net.send({ t: 'hello', name: this.me.name, color: this.me.color });
     this.onChange();
   }
 
-  leave() { this.net.leave(); this._resetWorld(true); this.onChange(); }
+  leave() { this.net.leave(); this._backToSolo(); }
+
+  // On my own again: start from a fresh copy of the current map.
+  _backToSolo() {
+    for (const id of [...this.players.keys()]) this._dropPlayer(id);
+    this.rounds.stop();
+    this.loadMap(this.settings.mode);
+    this._applySettings({ ...this.settings, gravity: 'normal', sky: 'day' });
+    this._setRound(this.rounds.public());
+    this.onChange();
+  }
 
   setMe(name, color) {
     this.me.name = name; this.me.color = color;
@@ -86,15 +124,88 @@ export class Session {
     if (this.net.role === 'host') this._broadcastRoster();
   }
 
-  _resetWorld(simulate) {
-    for (const id of [...this.players.keys()]) this._dropPlayer(id);
-    this.props.clear();
-    for (const h of this.props.hands.values()) this.props.world.removeBody(h);
-    this.props = new PropWorld(this.scene, this.levelColliders, simulate);
-    this.held = [null, null];
-    this._applySettings({ gravity: 'normal', sky: 'day' });
+  // ---- the map
+  /** Build a map from scratch (host / solo), or because the host said so (joined players). */
+  loadMap(mode) {
+    if (!MAPS[mode]) mode = 'sandbox';
+    this._building = true;
+    this.voxels.clear();
+    MAPS[mode].build(this.voxels);
+    this.mode = this.settings.mode = mode;
+    this.onMap(mode);            // the unbreakable scenery changes first: props are built on top of it
+    this.voxels.finalize();
+    this._building = false;
+    this.carveLog = [];
+    this._newProps(this.isAuthority);
+    this.onChange();
   }
 
+  _newProps(simulate) {
+    this.props.clear();
+    for (const h of this.props.hands.values()) this.props.world.removeBody(h);
+    this.props = new PropWorld(this.scene, this.world, simulate);
+    this.props.setGravity(GRAVITY[this.settings.gravity]);
+    this.held = [null, null];
+  }
+
+  /** Switch between sandbox and hide and seek (for everyone in the room). */
+  setMode(mode) { this.request({ t: 'mode', mode }); }
+  /** Repair everything that was broken. */
+  resetMap() { this.request({ t: 'resetmap' }); }
+  /** End this hide and seek round and start another. */
+  skipRound() { this.request({ t: 'round', cmd: 'skip' }); }
+
+  _hostSetMode(mode) {
+    if (!MAPS[mode] || mode === this.mode) return;
+    this.rounds.stop();
+    this.loadMap(mode);
+    this._applySettings({ ...this.settings, gravity: 'normal' });
+    this.net.broadcast({ t: 'map', mode, carves: [] });
+  }
+
+  _hostResetMap() {
+    this.voxels.reset();
+    this.carveLog = [];
+    this.net.broadcast({ t: 'map', mode: this.mode, carves: [], reset: true });
+  }
+
+  // joined players: the host says which map, and every dent made in it so far
+  _applyMap(msg) {
+    if (msg.mode !== this.mode) this.loadMap(msg.mode);
+    else this.voxels.reset();
+    for (const c of msg.carves || []) this.voxels.carve(c[0], c[1], c[2], c[3]);
+  }
+
+  // ---- breaking things
+  /** May this player break blocks right now? */
+  canBreak(id = this.myId) {
+    if (this.settings.mode === 'hideseek') return this.round.phase === 'waiting' || (this.round.phase === 'hunt' && this.round.giant === id);
+    return this.settings.smash;
+  }
+
+  /** The local player hit something: break a ball of blocks there. Returns true if anything broke. */
+  punch(pos, radius) {
+    if (!this.canBreak()) return false;
+    const c = [r3(pos.x), r3(pos.y), r3(pos.z), r3(Math.min(radius, MAX_PUNCH))];
+    if (!this._carve(c, true)) return false;         // shown at once, without waiting for the host
+    if (this.isAuthority) { this.carveLog.push(c); this.net.broadcast({ t: 'carve', c }); }
+    else this.net.send({ t: 'break', c });
+    return true;
+  }
+
+  _carve(c, fx) {
+    const res = this.voxels.carve(c[0], c[1], c[2], c[3]);
+    if (res && fx) this.onCarve(new THREE.Vector3(c[0], c[1], c[2]), c[3], res);
+    return res;
+  }
+
+  _hostCarve(c, except = null) {
+    if (!this._carve(c, true)) return;
+    this.carveLog.push(c);
+    this.net.broadcast({ t: 'carve', c }, except);
+  }
+
+  // ---- players
   _dropPlayer(id) {
     const p = this.players.get(id);
     if (!p) return;
@@ -144,6 +255,7 @@ export class Session {
         this._ensureAvatar(p);
         if (p.avatar) { p.avatar.setName(p.name); p.avatar.setColor(p.color); }
         this._broadcastRoster();
+        if (!p.greeted) { p.greeted = true; this.net.sendTo(from, { t: 'map', mode: this.mode, carves: this.carveLog }); }
       } else if (msg.t === 'state' && Array.isArray(msg.s) && msg.s.length === STATE_LEN) {
         p.state = msg.s;
       } else {
@@ -151,6 +263,8 @@ export class Session {
       }
     } else if (this.net.role === 'client') {
       if (msg.t === 'roster') this._applyRoster(msg.list);
+      else if (msg.t === 'map') this._applyMap(msg);
+      else if (msg.t === 'carve' && Array.isArray(msg.c)) this._carve(msg.c, true);
       else if (msg.t === 'snap') {
         for (const [id, ...s] of msg.players) {
           if (id === this.myId) continue;
@@ -165,7 +279,9 @@ export class Session {
           const pr = this.props.props.get(id);
           if (!pr || (pr.heldKey && pr.heldKey !== `${this.myId}:${i}`)) this.held[i] = null;
         }
-        if (msg.settings && (msg.settings.gravity !== this.settings.gravity || msg.settings.sky !== this.settings.sky)) this._applySettings(msg.settings);
+        const s = msg.settings;
+        if (s && (s.gravity !== this.settings.gravity || s.sky !== this.settings.sky || s.smash !== this.settings.smash)) this._applySettings(s);
+        if (msg.round) this._setRound(msg.round);
       } else if (msg.t === 'boom' && Array.isArray(msg.pos)) {
         this.onBoom(new THREE.Vector3().fromArray(msg.pos));
       }
@@ -180,6 +296,8 @@ export class Session {
 
   _handleRequest(from, msg) {
     const props = this.props;
+    // hide and seek is played with bare hands: no spawning, deleting or undoing
+    if (this.settings.mode === 'hideseek' && ['spawn', 'throw', 'del', 'undo'].includes(msg.t)) return;
     switch (msg.t) {
       case 'spawn': {
         if (!TYPE[msg.type] || !Array.isArray(msg.pos)) return;
@@ -207,17 +325,27 @@ export class Session {
         break;
       }
       case 'button': this._pressButton(msg.id); break;
+      case 'break': {
+        const c = msg.c;
+        if (Array.isArray(c) && c.length === 4 && c.every(Number.isFinite) && c[3] <= MAX_PUNCH && this.canBreak(from)) this._hostCarve(c.map(r3), from);
+        break;
+      }
+      case 'mode': this._hostSetMode(msg.mode); break;
+      case 'resetmap': if (this.settings.mode === 'sandbox') this._hostResetMap(); break;
+      case 'round': if (msg.cmd === 'skip') this.rounds.skip(); break;
     }
   }
 
   _pressButton(id) {
     const now = performance.now();
     if (now - (this._buttonT[id] || 0) < 500) return;
+    if (this.settings.mode === 'hideseek' && id !== 'sky') return;   // the world is left alone during hide and seek
     this._buttonT[id] = now;
     const cycle = (order, cur) => order[(order.indexOf(cur) + 1) % order.length];
     if (id === 'lowgrav') this._applySettings({ ...this.settings, gravity: this.settings.gravity === 'low' ? 'normal' : 'low' });
     else if (id === 'gravity') this._applySettings({ ...this.settings, gravity: cycle(GRAVITY_ORDER, this.settings.gravity) });
     else if (id === 'sky') this._applySettings({ ...this.settings, sky: cycle(SKY_ORDER, this.settings.sky) });
+    else if (id === 'smash') this._applySettings({ ...this.settings, smash: !this.settings.smash });
     else if (id === 'clear') this.props.clear();
     else if (id === 'rain' || id === 'balloons') {
       const kinds = id === 'balloons' ? [TYPE.balloon] : PROP_TYPES.filter(t => !t.fixed && !t.fuse && !t.float && t.mass < 100);
@@ -234,13 +362,25 @@ export class Session {
   }
 
   _applySettings(s) {
-    this.settings = { gravity: GRAVITY[s.gravity] ? s.gravity : 'normal', sky: SKY_ORDER.includes(s.sky) ? s.sky : 'day' };
+    this.settings = {
+      gravity: GRAVITY[s.gravity] ? s.gravity : 'normal',
+      sky: SKY_ORDER.includes(s.sky) ? s.sky : 'day',
+      smash: s.smash !== false,
+      mode: this.mode || 'sandbox',
+    };
     const g = GRAVITY[this.settings.gravity];
     this.loco.cfg.gravity = g;
     this.props.setGravity(g);
     this.onButton('lowgrav', this.settings.gravity === 'low');
     this.onSettings(this.settings);
     this.onChange();
+  }
+
+  _setRound(round) {
+    const prev = this.round;
+    if (prev.phase === round.phase && prev.t === round.t && prev.giant === round.giant && prev.n === round.n && prev.out.length === round.out.length && prev.winner === round.winner) return;
+    this.round = round;
+    this.onRound(round, prev);
   }
 
   // Hand pose of any player, from the local player or the last state they sent.
@@ -268,8 +408,7 @@ export class Session {
 
   /** Throw a mini item; it grows to full size where it lands. */
   throwItem(typeId, pos, vel) {
-    const r = v => Math.round(v * 1000) / 1000;
-    this.request({ t: 'throw', type: typeId, pos: pos.toArray().map(r), vel: vel.toArray().map(r) });
+    this.request({ t: 'throw', type: typeId, pos: pos.toArray().map(r3), vel: vel.toArray().map(r3) });
   }
 
   deleteNear(handPos, scale = 1) {
@@ -313,7 +452,7 @@ export class Session {
 
   // ---- per frame
   /**
-   * @param local { head: {pos, quat}, hands: [{pos, quat}] } my pose in world space
+   * @param local { head: {pos, quat}, hands: [{pos, quat}], scale } my pose in world space
    */
   update(dt, local) {
     this._local = local;
@@ -348,8 +487,17 @@ export class Session {
         if (e.type !== 'boom') continue;
         if (this.net.role === 'host') this.net.broadcast({ t: 'boom', pos: e.pos });
         this.onBoom(new THREE.Vector3().fromArray(e.pos));
+        this._hostCarve([r3(e.pos[0]), r3(e.pos[1]), r3(e.pos[2]), BLAST_DENT]);   // explosions leave craters
       }
       props.events.length = 0;
+
+      // hide and seek rounds
+      if (this.settings.mode === 'hideseek') {
+        const ids = [], poses = {};
+        for (const [id, head, hands, sc] of bodies) { ids.push(id); poses[id] = { head, hands: hands.map(h => h.pos), scale: sc }; }
+        for (const e of this.rounds.update(dt, ids, poses)) if (e.type === 'start') this._hostResetMap();   // every round starts on a repaired map
+      }
+      this._setRound(this.rounds.public());
     } else {
       props.interpolate(dt);
       // draw what I'm holding at my own hand, without waiting for the host
@@ -368,6 +516,7 @@ export class Session {
 
     // other players' skeletons glide toward their latest pose
     const a = 1 - Math.exp(-20 * dt);
+    const inRound = this.settings.mode === 'hideseek' && this.round.phase !== 'waiting';
     for (const p of this.players.values()) {
       if (!p.state || !p.avatar) continue;
       if (!p.cur) p.cur = p.state.slice();
@@ -377,6 +526,10 @@ export class Session {
       const hands = [0, 1].map(i => { const o = 7 + i * 7; return { pos: new THREE.Vector3(c[o], c[o + 1], c[o + 2]), quat: new THREE.Quaternion(c[o + 3], c[o + 4], c[o + 5], c[o + 6]).normalize() }; });
       p.avatar.root.visible = true;
       p.avatar.update(head.pos, head.quat, hands, c[21] || 1);
+      // a name tag over a hider would give them away; caught players fade to ghosts
+      const role = inRound ? this.role(p.id) : 'free';
+      if (p.avatar.label) p.avatar.label.visible = role !== 'hider';
+      p.avatar.setGhost(role === 'ghost');
     }
 
     // network send
@@ -387,7 +540,7 @@ export class Session {
       if (this.net.role === 'host') {
         const players = [['h', ...mine]];
         for (const p of this.players.values()) if (p.state) players.push([p.id, ...p.state]);
-        this.net.broadcast({ t: 'snap', players, ...props.snapshot(), settings: this.settings });
+        this.net.broadcast({ t: 'snap', players, ...props.snapshot(), settings: this.settings, round: this.round });
       } else {
         this.net.send({ t: 'state', s: mine });
       }
@@ -396,9 +549,8 @@ export class Session {
 }
 
 function packState(local) {
-  const r = v => Math.round(v * 1000) / 1000;
   const out = [...local.head.pos.toArray(), ...local.head.quat.toArray()];
   for (const h of local.hands) out.push(...h.pos.toArray(), ...h.quat.toArray());
   out.push(local.scale || 1);
-  return out.map(r);
+  return out.map(r3);
 }

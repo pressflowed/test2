@@ -82,14 +82,14 @@ const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _n = new THREE.Vect
 
 export class PropWorld {
   /**
-   * @param scene           three.js scene to draw props in
-   * @param levelColliders  the level's static boxes (so props land on them)
-   * @param simulate        true on the host / solo; false for joined players
+   * @param scene     three.js scene to draw props in
+   * @param level     the World: its permanent boxes and (if any) its voxels are what props land on
+   * @param simulate  true on the host / solo; false for joined players
    */
-  constructor(scene, levelColliders, simulate = true) {
+  constructor(scene, level, simulate = true) {
     this.scene = scene;
     this.simulate = simulate;
-    this.level = levelColliders;
+    this.level = level;
     this.props = new Map();
     this.seeds = new Map();     // thrown minis that turn into props where they land
     this.events = [];           // { type: 'boom', pos: [x, y, z] } for the session to pick up
@@ -110,13 +110,16 @@ export class PropWorld {
       w.addContactMaterial(new CANNON.ContactMaterial(m, w.defaultMaterial, { friction: 0.4, restitution: t.bounce }));
       w.addContactMaterial(new CANNON.ContactMaterial(m, this.bouncyMat, { friction: 0.3, restitution: 0.95 }));
     }
-    for (const c of levelColliders) {
+    for (const c of level.statics) {
       const half = new CANNON.Vec3((c.max.x - c.min.x) / 2, (c.max.y - c.min.y) / 2, (c.max.z - c.min.z) / 2);
       const b = new CANNON.Body({ mass: 0, type: CANNON.Body.STATIC, collisionFilterGroup: G_STATIC, collisionFilterMask: G_LIGHT | G_HEAVY });
       b.addShape(new CANNON.Box(half));
       b.position.set((c.min.x + c.max.x) / 2, (c.min.y + c.max.y) / 2, (c.min.z + c.max.z) / 2);
       w.addBody(b);
     }
+    this.cellBodies = new Map();   // voxel cell index -> one static body holding that cell's boxes
+    this._seedCols = [];
+    if (level.voxels && simulate) this.syncCells(level.voxels.cells);
     // balloons: lift that beats gravity, applied on every physics substep
     w.addEventListener('preStep', () => {
       for (const p of this.props.values()) {
@@ -124,6 +127,27 @@ export class PropWorld {
       }
     });
     this.hands = new Map(); // key -> kinematic sphere that knocks light props around
+  }
+
+  // ---- the voxel world
+  /** Rebuild the physics for voxel cells whose blocks changed, and wake props so they can fall. */
+  syncCells(cells) {
+    if (!this.simulate) return;
+    for (const cell of cells) {
+      const old = this.cellBodies.get(cell.index);
+      if (old) { this.world.removeBody(old); this.cellBodies.delete(cell.index); }
+      if (!cell.boxes.length) continue;
+      const body = new CANNON.Body({ mass: 0, type: CANNON.Body.STATIC, collisionFilterGroup: G_STATIC, collisionFilterMask: G_LIGHT | G_HEAVY });
+      const o = cell.boxes[0].min;
+      body.position.set(o.x, o.y, o.z);
+      for (const b of cell.boxes) {
+        const hx = (b.max.x - b.min.x) / 2, hy = (b.max.y - b.min.y) / 2, hz = (b.max.z - b.min.z) / 2;
+        body.addShape(new CANNON.Box(new CANNON.Vec3(hx, hy, hz)), new CANNON.Vec3(b.min.x + hx - o.x, b.min.y + hy - o.y, b.min.z + hz - o.z));
+      }
+      this.world.addBody(body);
+      this.cellBodies.set(cell.index, body);
+    }
+    for (const p of this.props.values()) if (p.body && !p.type.fixed) p.body.wakeUp();
   }
 
   // ---- props
@@ -237,7 +261,9 @@ export class PropWorld {
       let hit = false;
       for (let i = 0; i < steps && !hit; i++) {
         s.pos.addScaledVector(s.vel, dt / steps);
-        for (const c of this._solids()) {
+        const solids = this.level.query(s.pos, R, this._seedCols);
+        for (const p of this.props.values()) if (p.col) solids.push(p.col);
+        for (const c of solids) {
           if (!near(s.pos, c, R) || sdBox(s.pos, c) >= R) continue;
           pushOut(s.pos, R, c, _n);
           hit = true;
@@ -257,12 +283,6 @@ export class PropWorld {
       this.spawn(s.type.id, pos, quat, { owner: s.owner, vel });
       this._removeSeed(s.id);
     }
-  }
-
-  _solids() {
-    const out = this.level.slice();
-    for (const p of this.props.values()) if (p.col) out.push(p.col);
-    return out;
   }
 
   // ---- holding (grab and throw)

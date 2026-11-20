@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { World } from '../src/physics.js';
 import { Locomotion } from '../src/locomotion.js';
+import { VoxelWorld } from '../src/voxels.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const DT = 1 / 72;
@@ -186,4 +187,46 @@ test('more power means a faster launch from the same stroke', () => {
   };
   const normal = launch(1), strong = launch(2);
   assert.ok(strong > normal * 1.5, `power 1: ${normal.toFixed(1)} m/s, power 2: ${strong.toFixed(1)} m/s`);
+});
+
+test('players stand on voxel blocks, and drop when the block is broken', () => {
+  const world = new World();
+  world.addBox(0, -1, 0, 40, 1, 40, 'grass');
+  world.voxels = new VoxelWorld(64, 32, 64, -8, 0, -8);
+  world.voxels.box(0, 0, 0, 3, 2, 3, 'rock');
+  world.voxels.finalize();
+  const loco = new Locomotion(world);
+  loco.teleport(V(0, 2, 0));
+  run(loco, 150, rest(), [false, false]);
+  assert.ok(Math.abs(loco.head.y - (2 + loco.cfg.bodyHeight)) < 0.03, `standing on the block: head ${loco.head.y}`);
+  for (const y of [1.8, 1.2, 0.6, 0.2]) world.voxels.carve(0, y, 0, 2.2);
+  run(loco, 150, rest(), [false, false]);
+  assert.ok(Math.abs(loco.head.y - loco.cfg.bodyHeight) < 0.3, `dropped to the ground: head ${loco.head.y}`);
+});
+
+test('a punch reports where it landed and how hard, and the hand lets go when the block breaks', () => {
+  const world = new World();
+  world.addBox(0, -1, 0, 40, 1, 40, 'grass');
+  world.voxels = new VoxelWorld(64, 32, 64, -8, 0, -8);
+  world.voxels.box(0, 0, -1.5, 4, 4, 1, 'stone');   // wall, front face at z = -1
+  world.voxels.finalize();
+  const loco = new Locomotion(world);
+  loco.teleport(V(0, 0, 0));
+  run(loco, 150, rest(), [false, false]);
+  // punch straight forward at 6 m/s
+  let touch = null;
+  for (let i = 0; i < 20 && !touch; i++) {
+    const z = -0.2 - i * 6 * DT;
+    loco.update(DT, HEAD, [V(-0.25, -0.2, -0.2).add(HEAD), V(0.25, -0.2, z).add(HEAD)], [true, true]);
+    touch = loco.events.find(e => e.type === 'touch');
+  }
+  assert.ok(touch && touch.hand === 1 && touch.col.voxel, 'right hand hit the wall');
+  assert.ok(Math.abs(touch.point.z - (-1 + loco.cfg.handR)) < 0.03, `hit point z ${touch.point.z}`);
+  assert.ok(touch.normal.z > 0.9, 'surface faces the player');
+  const into = -touch.vel.dot(touch.normal);
+  assert.ok(Math.abs(into - 6) < 0.5, `speed into the wall ${into}`);
+  assert.ok(loco.hands[1].pinned);
+  world.voxels.carve(touch.point.x, touch.point.y, touch.point.z - 0.2, 0.5);
+  loco.update(DT, HEAD, [V(-0.25, -0.2, -0.2).add(HEAD), V(0.25, -0.2, -1.2).add(HEAD)], [true, true]);
+  assert.ok(!loco.hands[1].pinned, 'hand goes into the hole');
 });

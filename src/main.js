@@ -1,18 +1,24 @@
-// Canopy Tag sandbox: arm-push movement, physics props, the arm menu and multiplayer.
+// Canopy Tag: arm-push movement in a breakable voxel world, with a sandbox mode
+// (props, arm menu) and a hide and seek mode (one giant, tiny hiders), solo or online.
 import * as THREE from 'three';
 import { World } from './physics.js';
 import { Locomotion } from './locomotion.js';
 import { Avatar, BONE, fingertip } from './avatar.js';
 import { DesktopInput } from './input-desktop.js';
 import { VRInput } from './input-vr.js';
-import { initAudio, tap, boom, boing } from './audio.js';
-import { buildSandbox, lightButton } from './sandbox.js';
+import { initAudio, tap, boom, boing, crunch, jingle } from './audio.js';
+import { buildScenery, lightButton } from './sandbox.js';
 import { PROP_TYPES, propVisual, propSize, BLAST_RADIUS } from './props.js';
 import { Net } from './net.js';
-import { Session, GRAVITY_LABEL } from './session.js';
+import { Session, GRAVITY, GRAVITY_LABEL } from './session.js';
 import { ArmMenu, SIZES, POWERS } from './armmenu.js';
 import { Sky, SKIES } from './sky.js';
-import { BlobShadows, Blasts } from './fx.js';
+import { BlobShadows, Blasts, Debris } from './fx.js';
+import { VoxelWorld, VOXEL, MATERIALS } from './voxels.js';
+import { VoxelRenderer } from './voxelmesh.js';
+import { MAPS } from './maps.js';
+import { ROUND } from './rounds.js';
+import { Hud } from './hud.js';
 
 const $ = id => document.getElementById(id);
 const canvas = $('view');
@@ -33,6 +39,8 @@ scene.add(hemi, sun);
 const sky = new Sky(scene, hemi, sun);
 const shadows = new BlobShadows(scene);
 const blasts = new Blasts(scene);
+const debris = new Debris(scene);
+const hud = new Hud(scene);
 
 // the rig is the player's play space; camera and controllers live inside it
 const rig = new THREE.Group();
@@ -51,8 +59,9 @@ resize();
 
 // ---- world, player, inputs
 const world = new World();
-const level = buildSandbox(scene, world);
-const levelColliders = world.colliders.slice();
+const voxels = world.voxels = new VoxelWorld();
+const level = buildScenery(scene, world);
+const voxelView = new VoxelRenderer(scene, voxels);
 const saved = readSettings();
 const loco = new Locomotion(world, saved.bodyHeight ? { bodyHeight: saved.bodyHeight } : {});
 
@@ -75,12 +84,19 @@ const stats = { speed: 0, best: 0, bodyHeight: loco.cfg.bodyHeight, mode: 'deskt
 let sizeIdx = SIZES.indexOf(1), powerIdx = POWERS.indexOf(1);
 let calib = 0;            // seconds left on the calibrate countdown (0 = not calibrating)
 let carry = null;         // the mini item in my right hand: { typeId, mesh }
-respawn();
+const lastPunch = [0, 0];
 
-// start near the spawn point, spread out a little so friends don't land inside each other
+// How hard a hit has to be to break something, in metres per second of real hand speed
+// straight into the surface. Hitting downward needs a real slam, so running across the
+// top of something does not crater it.
+const PUNCH = { hit: 2.6, slam: 4.5, cooldown: 120 };
+
+// start near the map's spawn point, spread out a little so friends don't land inside each other
 function respawn() {
+  const map = MAPS[session.settings.mode] || MAPS.sandbox;
+  const at = session.role() === 'giant' ? map.giantSpawn : map.spawn;
   const a = Math.random() * Math.PI * 2, r = 0.6 + Math.random() * 1.4;
-  loco.teleport(level.spawn.clone().add(new THREE.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r * 0.5)), level.spawnYaw);
+  loco.teleport(new THREE.Vector3(at[0] + Math.cos(a) * r, at[1], at[2] + Math.sin(a) * r * 0.5), 0);
 }
 
 function readSettings() {
@@ -103,14 +119,20 @@ function applyView() {
   camera.far = 260 / Math.min(s, 1);
   camera.updateProjectionMatrix();
 }
+// Your size and power come from the arm menu, unless a hide and seek round gives you a role.
+function applySizing() {
+  const role = session.role();
+  const scale = role === 'giant' ? ROUND.giantScale : role === 'hider' ? ROUND.hiderScale : role === 'ghost' ? 1 : SIZES[sizeIdx];
+  loco.power = role === 'giant' ? ROUND.giantPower : role === 'hider' ? ROUND.hiderPower : role === 'ghost' ? 1 : POWERS[powerIdx];
+  if (loco.scale !== scale) { loco.setScale(scale, headLocal); applyView(); }
+}
 function setSize(i) {
   sizeIdx = Math.min(Math.max(i, 0), SIZES.length - 1);
-  loco.setScale(SIZES[sizeIdx], headLocal);
-  applyView();
+  applySizing();
 }
 function setPower(i) {
   powerIdx = Math.min(Math.max(i, 0), POWERS.length - 1);
-  loco.power = POWERS[powerIdx];
+  applySizing();
 }
 
 // ---- 2D menu
@@ -151,8 +173,8 @@ vrBtn.addEventListener('click', async () => {
     stats.mode = 'vr';
     menu.hidden = true;
     armMenu.visible = true;
-    respawn();
-    xrSession.addEventListener('end', () => { stats.mode = 'desktop'; menu.hidden = false; respawn(); });
+    if (session.role() === 'free') respawn();
+    xrSession.addEventListener('end', () => { stats.mode = 'desktop'; menu.hidden = false; });
   } catch (err) {
     console.error(err);
     status('Could not start VR: ' + err.message, 'error');
@@ -192,9 +214,61 @@ function renderRoom() {
       ? `You are hosting. ${session.playerCount} player${session.playerCount === 1 ? '' : 's'} in the room.`
       : `You joined. ${session.playerCount} players in the room.`;
   }
+  for (const btn of document.querySelectorAll('[data-mode]')) btn.setAttribute('aria-pressed', String(btn.dataset.mode === session.settings.mode));
+  $('mode-note').textContent = session.settings.mode === 'hideseek'
+    ? (session.playerCount < 2 ? 'Hide and seek starts when a second player joins. You can explore the map until then.' : 'Rounds run by themselves: one giant, everyone else hides.')
+    : 'Build, spawn props and smash things freely.';
 }
 session.onChange = renderRoom;
 session.onSettings = s => { sky.set(s.sky); applyView(); };
+session.onMap = mode => {
+  level.setMap(mode);
+  if (carry) { scene.remove(carry.mesh); carry = null; }
+  applySizing();
+  respawn();
+};
+session.onCarve = (pos, radius, res) => {
+  // rubble, noise, and a thump in the hands if it happened close by
+  debris.burst(res.samples.map(([x, y, z, m]) => [x, y, z, MATERIALS[m].color]), pos, VOXEL * 0.9, GRAVITY[session.settings.gravity]);
+  const d = pos.distanceTo(loco.head), big = res.count + res.collapsed;
+  crunch(MATERIALS[res.samples[0] ? res.samples[0][3] : 4].kind, Math.min(1, (0.35 + big / 250) * 5 / (d + 4)));
+  if (d < radius + 1.5 * loco.scale) for (let i = 0; i < 2; i++) vr.pulse(i, Math.min(1, 0.4 + big / 300), 60);
+};
+session.onRound = (r, prev) => {
+  const role = session.role(), me = session.myId;
+  applySizing();
+  if (r.phase === 'waiting') {
+    if (prev.phase !== 'waiting') hud.flash('Waiting for players', 'Hide and seek needs two or more');
+    return;
+  }
+  if (r.phase === 'hide' && r.n !== prev.n) {              // a new round
+    respawn();
+    if (role === 'giant') hud.flash('You are the GIANT', `Wait ${ROUND.hide} seconds while they hide`, 5, '#ff8a55');
+    else hud.flash('HIDE!', `${session.nameOf(r.giant)} is the giant. You have ${ROUND.hide} seconds`, 5, '#9be15d');
+    jingle([392, 523, 659]);
+  } else if (r.phase === 'hunt' && prev.phase === 'hide') {
+    if (role === 'giant') hud.flash('GO!', 'Smash things. Touch a hider to catch them', 4, '#ff8a55');
+    else hud.flash('The giant is loose', 'Stay out of sight', 4, '#ff8a55');
+    jingle([659, 523, 392, 262]);
+    for (let i = 0; i < 2; i++) vr.pulse(i, 1, 250);
+  }
+  for (const id of r.out) {
+    if (prev.out.includes(id)) continue;
+    if (id === me) {
+      // back to normal size, out in the open, so you never grow inside a hiding hole
+      respawn();
+      hud.flash('Caught!', 'You can watch the rest of the round', 4, '#ff8a55');
+      for (let i = 0; i < 2; i++) vr.pulse(i, 1, 300);
+    }
+    else hud.flash(`${session.nameOf(id)} was caught`, '', 3);
+    jingle([330, 262]);
+  }
+  if (r.phase === 'over' && prev.phase !== 'over' && r.winner) {
+    const won = (r.winner === 'giant') === (r.giant === me);
+    hud.flash(r.winner === 'giant' ? 'The giant wins' : 'The hiders win', won ? 'Nice one! Next round soon' : 'Next round soon', 7, won ? '#9be15d' : '#f4eed6');
+    jingle(won ? [523, 659, 784, 1047] : [392, 330, 262]);
+  }
+};
 session.onButton = (id, on) => {
   const b = level.buttons.find(x => x.id === id);
   if (!b) return;
@@ -232,6 +306,8 @@ $('copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(text); status('Link copied.', 'ok'); }
   catch (e) { getSelection().selectAllChildren($('room-link')); status('Select the link and copy it.', ''); }
 });
+// game mode (anyone in the room can switch it)
+for (const btn of document.querySelectorAll('[data-mode]')) btn.addEventListener('click', () => session.setMode(btn.dataset.mode));
 const roomParam = new URLSearchParams(location.search).get('room');
 if (roomParam) { codeInput.value = roomParam.toUpperCase(); joinRoom(roomParam); }
 renderRoom();
@@ -239,16 +315,67 @@ renderRoom();
 // ---- arm menu actions (poked in VR, or keys on desktop)
 function menuAction(id) {
   if (id.startsWith('item:')) { session.select(id.slice(5)); return; }
+  if (id.startsWith('mode:')) { session.setMode(id.slice(5)); return; }
+  const free = session.role() === 'free';
   switch (id) {
-    case 'size-': setSize(sizeIdx - 1); break;
-    case 'size+': setSize(sizeIdx + 1); break;
-    case 'power-': setPower(powerIdx - 1); break;
-    case 'power+': setPower(powerIdx + 1); break;
+    case 'size-': if (free) setSize(sizeIdx - 1); break;
+    case 'size+': if (free) setSize(sizeIdx + 1); break;
+    case 'power-': if (free) setPower(powerIdx - 1); break;
+    case 'power+': if (free) setPower(powerIdx + 1); break;
+    case 'skip': session.skipRound(); break;
+    case 'resetmap': session.resetMap(); break;
+    case 'smash': session.pressButton(id); break;
     case 'calibrate': calib = 3.99; break;   // counts down so you can put your arms down first
-    case 'home': respawn(); break;
+    case 'home': if (free) respawn(); break;
     case 'undo': session.undo(); break;
     case 'gravity': case 'sky': case 'rain': case 'balloons': case 'clear': session.pressButton(id); break;
   }
+}
+
+// A hand hit a breakable surface: was it hard enough to smash it?
+function tryPunch(e, now) {
+  const s = loco.scale;
+  if (s < 0.7 || !session.canBreak() || now - lastPunch[e.hand] < PUNCH.cooldown) return false;
+  const into = -e.vel.dot(e.normal) / s;
+  const need = e.normal.y > 0.7 ? PUNCH.slam : PUNCH.hit;
+  if (into < need) return false;
+  const mat = voxels.matAt(e.point.x - e.normal.x * 0.13 * s, e.point.y - e.normal.y * 0.13 * s, e.point.z - e.normal.z * 0.13 * s);
+  const hard = mat ? MATERIALS[mat].hard : 1;
+  // harder hits and softer stuff make bigger dents
+  const r = s * Math.min(0.26 + (into - need) * 0.06, 0.55) * hard;
+  if (!session.punch(e.point.clone().addScaledVector(e.normal, -r * 0.45), r)) return false;
+  lastPunch[e.hand] = now;
+  vr.pulse(e.hand, 1, 90);
+  return true;
+}
+
+// Desktop: punch whatever is within reach of where you are looking.
+function punchAhead() {
+  const s = loco.scale;
+  if (s < 0.7 || !session.canBreak()) return;
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(localPose.head.quat);
+  const hit = voxels.raycast(localPose.head.pos, dir, 1.7 * s);
+  if (hit) { const r = 0.42 * s * MATERIALS[hit.mat].hard; session.punch(hit.point.addScaledVector(hit.normal, -r * 0.45), r); }
+}
+
+function mmss(t) { return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; }
+
+// The small line of text that stays on screen during hide and seek.
+function roundStatus() {
+  if (session.settings.mode !== 'hideseek') return '';
+  const r = session.round, role = session.role();
+  if (r.phase === 'waiting') return 'Hide and seek: waiting for another player';
+  const left = session.playerCount - 1 - r.out.length;
+  if (r.phase === 'hide') return role === 'giant' ? `They are hiding... ${r.t}` : `Hide! Giant in ${r.t}`;
+  if (r.phase === 'hunt') return role === 'giant' ? `Find them!  ${mmss(r.t)}  ·  ${left} left` : role === 'ghost' ? `Caught  ·  ${mmss(r.t)}` : `Stay hidden  ${mmss(r.t)}`;
+  return '';
+}
+function gameLines() {
+  if (session.settings.mode !== 'hideseek') return ['Sandbox', 'Build, spawn props and smash freely.'];
+  const r = session.round;
+  if (r.phase === 'waiting') return ['Hide and seek', 'Waiting for another player.', 'Explore the map until then.'];
+  const what = { hide: 'hiding', hunt: 'hunting', over: 'over' }[r.phase];
+  return [`Round ${r.n}: ${what} ${r.phase === 'over' ? '' : mmss(r.t)}`, `Giant: ${session.nameOf(r.giant)}`, `Hiders left: ${session.playerCount - 1 - r.out.length}`];
 }
 
 function startCarry(typeId) {
@@ -279,6 +406,7 @@ const handHist = [[], []];   // recent hand positions for throwing
 const tip = new THREE.Vector3(), menuPose = { pos: new THREE.Vector3(), quat: new THREE.Quaternion() };
 const tmpM = new THREE.Matrix4(), tmpV = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
 let last = performance.now(), boardT = 0, gameTime = 0;
+session.loadMap('sandbox');
 applyView();
 
 function handVelocity(i) {
@@ -297,7 +425,10 @@ renderer.setAnimationLoop((time, frame) => {
   const playing = inVR || desktop.enabled;
   let active;
   // what the player asked for this frame
-  const act = { spawn: false, throw: false, next: 0, slot: null, undo: false, del: [false, false], grab: [false, false], grabStart: false, respawn: false, menu: [] };
+  const act = { spawn: false, throw: false, next: 0, slot: null, undo: false, del: [false, false], grab: [false, false], grabStart: false, respawn: false, punch: false, menu: [] };
+  const tools = session.settings.mode === 'sandbox';      // spawning and deleting are sandbox-only
+  const role = session.role();
+  const frozen = role === 'giant' && session.round.phase === 'hide';   // the giant waits, blind, while they hide
 
   if (inVR) {
     if (!vr.update(frame)) { renderer.render(scene, camera); return; }
@@ -320,6 +451,9 @@ renderer.setAnimationLoop((time, frame) => {
       const { pressed, wheel } = desktop.takeInput();
       const k = c => pressed.has(c);
       act.throw = k('KeyF');
+      act.punch = k('KeyJ');
+      if (k('KeyO')) session.setMode(tools ? 'hideseek' : 'sandbox');
+      if (k('KeyK')) session.skipRound();
       act.spawn = k('KeyV');
       act.undo = k('KeyZ');
       act.del[1] = k('KeyX');
@@ -331,15 +465,20 @@ renderer.setAnimationLoop((time, frame) => {
       if (k('Comma')) armMenu.nextPage(-1);
       if (k('Period')) armMenu.nextPage(1);
       for (const [code, id] of [['BracketLeft', 'size-'], ['BracketRight', 'size+'], ['Minus', 'power-'], ['Equal', 'power+'],
-        ['KeyL', 'gravity'], ['KeyN', 'sky'], ['KeyP', 'rain'], ['KeyB', 'balloons'], ['KeyC', 'clear']]) if (k(code)) act.menu.push(id);
+        ['KeyL', 'gravity'], ['KeyN', 'sky'], ['KeyP', 'rain'], ['KeyB', 'balloons'], ['KeyC', 'clear'], ['KeyH', 'smash'], ['Backspace', 'resetmap']]) if (k(code)) act.menu.push(id);
     }
     headLocal.copy(desktop.headLocal); headQuatLocal.copy(desktop.headQuat);
     for (let i = 0; i < 2; i++) { handLocals[i].copy(desktop.hands[i].local); handQuatsLocal[i].copy(desktop.hands[i].quat); }
     active = desktop.active;
   }
 
-  if (playing) {
-    if (act.respawn) respawn();
+  if (playing && frozen) {
+    // held in place: no moving, no touching
+    loco.vel.set(0, 0, 0);
+    loco.toWorld(headLocal, loco.head);
+    for (let i = 0; i < 2; i++) { loco.toWorld(handLocals[i], loco.hands[i].pos); loco.hands[i].pinned = false; }
+  } else if (playing) {
+    if (act.respawn && role === 'free') respawn();
     if (calib > 0) {
       const before = Math.ceil(calib);
       calib -= dt;
@@ -355,10 +494,11 @@ renderer.setAnimationLoop((time, frame) => {
       }
     }
     // climbable props are part of the world for the movement code
-    world.colliders = levelColliders.concat(session.propColliders());
+    world.colliders = world.statics.concat(session.propColliders());
     loco.update(dt, headLocal, handLocals, active);
     for (const e of loco.events) {
       if (e.type === 'touch') {
+        if (e.col.voxel && tryPunch(e, now)) continue;
         tap(e.kind, 0.25 + 0.75 * e.strength, e.hand === 0 ? -0.5 : 0.5);
         if (inVR) vr.pulse(e.hand, 0.2 + 0.6 * e.strength, 25 + 40 * e.strength);
         if (e.col && e.col.button) session.pressButton(e.col.button);
@@ -404,15 +544,18 @@ renderer.setAnimationLoop((time, frame) => {
   }
   const pressedIds = armMenu.update(dt, menuPose, s, inVR && playing ? tip : null, {
     selected: session.selectedType.id, size: SIZES[sizeIdx], power: POWERS[powerIdx],
-    gravity: GRAVITY_LABEL[session.settings.gravity], sky: SKIES[session.settings.sky].label,
+    gravity: GRAVITY_LABEL[session.settings.gravity], sky: SKIES[session.settings.sky].label, smash: session.settings.smash,
     room: net.role === 'solo' ? 'Solo' : `Room ${net.code}`, players: session.playerCount,
     calib: calib > 0 ? Math.ceil(calib) : 0,
+    mode: session.settings.mode, locked: !tools, roleLocked: role !== 'free', game: gameLines(),
   });
   if (pressedIds.length && inVR) vr.pulse(1, 0.5, 30);
   for (const id of pressedIds.concat(act.menu)) menuAction(id);
 
+  if (playing && act.punch && !frozen) punchAhead();
+
   // sandbox actions
-  if (playing) {
+  if (playing && tools) {
     const n = PROP_TYPES.length;
     if (act.slot != null) { const t = PROP_TYPES[armMenu.page * 8 + act.slot]; if (t) session.select(t.id); }
     if (act.next) { session.selected = (session.selected + act.next + n) % n; armMenu.showItem(session.selectedType.id); }
@@ -448,8 +591,15 @@ renderer.setAnimationLoop((time, frame) => {
   const casters = session.props.shadowCasters([]);
   session.playerCasters(casters);
   casters.push({ x: loco.head.x, y: loco.head.y - loco.cfg.bodyHeight * s, z: loco.head.z, r: 0.36 * s });
-  shadows.update(casters, world.colliders);
+  shadows.update(casters, world.colliders, voxels);
   blasts.update(dt);
+  debris.update(dt);
+  // redraw chunks whose blocks changed: nearest first, one or two per frame (everything after a map change)
+  voxelView.update(voxelView.dirty.size > 24 ? 999 : inVR ? 1 : 2, loco.head);
+  if (avatar) avatar.setGhost(role === 'ghost');
+  hud.status = roundStatus();
+  hud.blind = frozen;
+  hud.update(dt, localPose.head.pos, localPose.head.quat, s);
   sky.update(dt, localPose.head.pos);
 
   boardT -= dt;
@@ -466,4 +616,5 @@ renderer.setAnimationLoop((time, frame) => {
 window.game = {
   THREE, loco, desktop, vr, renderer, scene, camera, get avatar() { return avatar; }, respawn, playDesktop, stats, session, net, level,
   armMenu, sky, menuAction, setSize, setPower, get carry() { return carry; }, get time() { return gameTime; },
+  voxels, voxelView, world, hud, punchAhead, tryPunch, ROUND,
 };

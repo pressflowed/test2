@@ -68,6 +68,10 @@ export class Locomotion {
     this._n = new THREE.Vector3();
     this._v0 = new THREE.Vector3();
     this._ct = new THREE.Vector3();
+    this._c = new THREE.Vector3();
+    this._before = new THREE.Vector3();
+    this._bodyCols = [];
+    this._handCols = [];
   }
 
   toWorld(local, out) {
@@ -129,10 +133,13 @@ export class Locomotion {
   _collideBody(fixVel) {
     const s = this._tmp2;
     const spheres = this._bodySpheres();
+    // everything the body could touch this step
+    const c = this.c;
+    const cols = this.world.query(this._c.set(this.head.x, this.head.y - c.bodyHeight / 2, this.head.z), c.bodyHeight / 2 + c.bodyR + c.headR, this._bodyCols);
     for (let iter = 0; iter < 3; iter++) {
       let moved = false;
       for (const [dy, r] of spheres) {
-        for (const col of this.world.colliders) {
+        for (const col of cols) {
           s.set(this.head.x, this.head.y + dy, this.head.z);
           if (!pushOut(s, r, col, this._n)) continue;
           moved = true;
@@ -159,7 +166,7 @@ export class Locomotion {
   }
 
   _pushOutAll(p, r) {
-    for (const col of this.world.colliders) pushOut(p, r, col, this._n);
+    for (const col of this.world.query(p, r, this._handCols)) pushOut(p, r, col, this._n);
   }
 
   // Sweep a hand from where it was to its target; stop at the first surface.
@@ -170,9 +177,10 @@ export class Locomotion {
     if (len > 1.5 * this.scale) { from.copy(this.head); len = from.distanceTo(h.target); }
     const steps = Math.max(1, Math.ceil(len / (0.025 * this.scale)));
     const q = this._tmp2;
+    const cols = this.world.query(this._c.addVectors(from, h.target).multiplyScalar(0.5), len / 2 + r, this._handCols);
     for (let i = 1; i <= steps; i++) {
       q.lerpVectors(from, h.target, i / steps);
-      for (const col of this.world.colliders) {
+      for (const col of cols) {
         if (!near(q, col, r) || sdBox(q, col) >= r) continue;
         pushOut(q, r, col, h.normal);
         h.pos.copy(q);
@@ -244,6 +252,7 @@ export class Locomotion {
         h.pos.copy(h.target); this._pushOutAll(h.pos, c.handR);
         continue;
       }
+      if (h.pinned && h.col.dead) h.pinned = false;          // what it was touching broke or changed
       if (h.pinned && h.col.delta) h.pos.add(h.col.delta);   // ride along with moving props
       if (h.pinned) {
         const lifted = sdBox(h.target, h.col) > c.handR + c.stickTol;
@@ -251,13 +260,17 @@ export class Locomotion {
         if (lifted || tooFar) h.pinned = false;
         else { push.add(this._correction(h, dt)); n++; continue; }
       }
-      const before = this._tmp2.copy(h.pos);
+      const before = this._before.copy(h.pos);
       const speed = before.distanceTo(h.target) / Math.max(dt, 1e-4);
       const hit = this._sweep(h);
       if (hit) {
         h.pinned = true; h.col = hit;
         push.add(this._correction(h, dt)); n++;
-        this.events.push({ type: 'touch', hand: h.index, kind: hit.kind, col: hit, strength: Math.min(Math.max(speed / 3, 0.1), 1) });
+        this.events.push({
+          type: 'touch', hand: h.index, kind: hit.kind, col: hit, strength: Math.min(Math.max(speed / (3 * this.scale), 0.1), 1),
+          // for punches: where it landed, which way the surface faces, and how fast the hand was going
+          point: h.pos.clone(), normal: h.normal.clone(), vel: h.target.clone().sub(before).divideScalar(Math.max(dt, 1e-4)),
+        });
       }
     }
 

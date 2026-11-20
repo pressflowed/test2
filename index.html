@@ -34,6 +34,9 @@ button { font: inherit; font-weight: 800; font-size: 17px; padding: 11px 16px; b
 button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
 .play { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 18px; }
 #vr { background: var(--moss); color: var(--bark); }
+.mode { flex: 1 1 160px; border: 3px solid transparent; }
+.mode[aria-pressed="true"] { border-color: var(--moss); color: var(--moss); }
+.note { margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.4; }
 #vr:disabled { background: var(--bark-2); color: var(--muted); cursor: default; }
 .roombox { padding: 12px 14px; border-radius: 12px; background: #0d1a13; }
 #room-code { font-size: 34px; font-weight: 900; letter-spacing: .25em; color: var(--moss); }
@@ -63,7 +66,7 @@ details ul { margin: 8px 0 0; padding-left: 20px; line-height: 1.5; }
 <div id="menu">
   <div class="card">
     <h1>Canopy Tag</h1>
-    <p class="sub">Sandbox. No legs: push off the world with your hands. Pull props out of your arm menu, throw them, build, blow things up, and bring a friend.</p>
+    <p class="sub">No legs: push off the world with your hands. Punch things to smash them. Build in the sandbox, or play hide and seek against a giant.</p>
 
     <h2>You</h2>
     <div class="row">
@@ -101,6 +104,13 @@ details ul { margin: 8px 0 0; padding-left: 20px; line-height: 1.5; }
       </div>
     </div>
 
+    <h2>Game mode</h2>
+    <div class="row">
+      <button class="mode" data-mode="sandbox" aria-pressed="true" type="button">Sandbox</button>
+      <button class="mode" data-mode="hideseek" aria-pressed="false" type="button">Hide and seek</button>
+    </div>
+    <p id="mode-note" class="note"></p>
+
     <div class="play">
       <button id="vr" type="button" disabled>Checking for VR...</button>
       <button id="desktop" type="button">Play on desktop</button>
@@ -111,13 +121,12 @@ details ul { margin: 8px 0 0; padding-left: 20px; line-height: 1.5; }
       <summary>Controls</summary>
       <ul>
         <li><b>Move:</b> push the ground down and back with your hands. Fast strokes, then let go, to leap. Push down on walls to climb.</li>
-        <li><b>Arm menu:</b> it floats above your left hand. Poke its tabs and buttons with your right fingertip. <b>X</b> hides or shows it.</li>
-        <li><b>Spawn:</b> on the Items tab, reach into a preview with your right hand, squeeze <b>grip</b> to pull it out, and throw it. It grows to full size where it lands.</li>
-        <li><b>Player tab:</b> change your size and your power. <b>World tab:</b> gravity, time of day, prop rain, balloons, undo, clear.</li>
-        <li><b>Right hand:</b> trigger quick-spawns the selected item at your hand, <b>A</b> picks the next item, <b>B</b> undoes your last spawn, stick snap-turns.</li>
-        <li><b>Left hand:</b> trigger deletes the prop nearest that hand, <b>Y</b> takes you back to the start.</li>
-        <li><b>Grip (either hand):</b> grab a prop; let go to throw it.</li>
-        <li><b>Desktop:</b> hold left / right click and drag down to push; Space for both hands. F throws the selected item, wheel or 1–8 pick one, , and . change page, V quick-spawns, G (hold) grabs, X deletes, Z undoes. M shows the menu, T switches tab, [ ] change size, - = change power, L gravity, N sky, P prop rain, B balloons, C clear, Q / E turn, R resets, Esc pauses.</li>
+        <li><b>Smash:</b> punch something hard and straight on to break a dent in it. Bigger players and harder punches break more. The floor and the outer wall never break.</li>
+        <li><b>Hide and seek:</b> one player is a giant, everyone else is tiny and fast. Hiders get 30 seconds to hide while the giant waits in the dark. Then the giant hunts: only the giant can smash, and touching a hider catches them. The giant wins by catching everyone; the hiders win if anyone lasts 3 minutes.</li>
+        <li><b>Arm menu:</b> it floats above your left hand. Poke its tabs and buttons with your right fingertip. To open or close it, poke the small <b>Menu</b> tab under it, or press <b>X</b>. The <b>Game</b> tab switches mode.</li>
+        <li><b>Sandbox, spawning:</b> on the Items tab, reach into a preview with your right hand, squeeze <b>grip</b> to pull it out, and throw it. Right trigger quick-spawns, <b>A</b> picks the next item, <b>B</b> undoes, left trigger deletes, grip grabs props.</li>
+        <li><b>Also:</b> right stick snap-turns, <b>Y</b> takes you back to the start (sandbox).</li>
+        <li><b>Desktop:</b> hold left / right click and drag down to push; Space for both hands. <b>J</b> punches what you look at. O switches mode. F throws the selected item, wheel or 1–8 pick one, V quick-spawns, G (hold) grabs, X deletes, Z undoes. M shows the menu, T switches tab, [ ] size, - = power, L gravity, N sky, H smashing on/off, Backspace repairs the map, Q / E turn, R resets, Esc pauses.</li>
       </ul>
     </details>
   </div>

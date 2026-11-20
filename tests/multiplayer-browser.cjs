@@ -59,6 +59,11 @@ const until = (page, fn, arg, ms = 15000) => page.waitForFunction(fn, arg, { tim
     console.log('     room code', code);
     check(/^[A-Z2-9]{4}$/.test(code), 'room code looks right');
 
+    // the host smashes a hole in the stone tower before anyone joins
+    const P = '(x, y, z, r) => game.session.punch(new game.THREE.Vector3(x, y, z), r)';
+    await a.evaluate(`(${P})(-24, 3, -21.5, 0.9)`);
+    check(await a.evaluate(() => !game.voxels.solidAt(-24, 3, -21.8)), 'host punched a hole in the tower');
+
     // friend joins from an invite link
     const b = await open(browser, `&room=${code}`, 'Bob');
     check(await until(b, () => game.net.role === 'client'), 'friend joined the room');
@@ -66,6 +71,16 @@ const until = (page, fn, arg, ms = 15000) => page.waitForFunction(fn, arg, { tim
     await b.click('#desktop');
     check(await until(a, () => game.session.players.size === 1 && [...game.session.players.values()][0].name === 'Bob'), 'host sees Bob in the room');
     check(await until(b, () => [...game.session.players.values()].some(p => p.name === 'Alice')), 'friend sees Alice in the room');
+
+    // someone who joins later still gets every hole made so far
+    check(await until(b, () => !game.voxels.solidAt(-24, 3, -21.8) && game.voxels.solidAt(-24, 6, -22)), 'the friend sees the hole that was made before they joined');
+    // a new punch by the host shows up for the friend, and the other way round
+    await a.evaluate(`(${P})(-21.5, 2, -24, 0.9)`);
+    check(await until(b, () => !game.voxels.solidAt(-21.8, 2, -24)), 'friend sees the host\'s new hole');
+    check(await b.evaluate(`(${P})(-26.5, 2, -24, 0.9)`), 'friend can punch too');
+    check(await until(a, () => !game.voxels.solidAt(-26.2, 2, -24)), 'host sees the friend\'s hole');
+    const same = async () => (await a.evaluate(() => game.voxels.count())) === (await b.evaluate(() => game.voxels.count()));
+    check(await same(), 'both worlds have exactly the same blocks');
 
     // host spawns things; friend sees them
     await a.evaluate(() => { game.session.select('crate'); for (let i = 0; i < 3; i++) game.session.spawnSelected(new game.THREE.Vector3(i, 1, 2), new game.THREE.Vector3(0, 0, -1)); });
@@ -131,6 +146,55 @@ const until = (page, fn, arg, ms = 15000) => page.waitForFunction(fn, arg, { tim
     });
     await a.waitForTimeout(400);
     await a.screenshot({ path: path.join(out, 'mp-host-view.png') });
+
+    // ---- hide and seek
+    await a.evaluate(() => { game.ROUND.hide = 3; game.ROUND.hunt = 60; game.ROUND.over = 3; game.debugCamera = null; });
+    await b.evaluate(() => game.session.setMode('hideseek'));      // either player can switch mode
+    check(await until(a, () => game.session.settings.mode === 'hideseek' && game.voxels.solidAt(13.5, 2, -30)), 'host switched to the hide and seek map');
+    check(await until(b, () => game.session.mode === 'hideseek' && game.voxels.solidAt(13.5, 2, -30) && game.session.props.props.size === 0), 'friend got the new map, with no props left over');
+    check(await until(a, () => game.session.round.phase === 'hide'), 'a round started by itself');
+    check(await until(b, () => game.session.round.phase === 'hide'), 'the friend sees the round');
+    const roles = async () => [await a.evaluate(() => game.session.role()), await b.evaluate(() => game.session.role())];
+    const r1 = await roles();
+    check(r1.includes('giant') && r1.includes('hider'), `one giant and one hider: ${r1}`);
+    const [giant, hider] = r1[0] === 'giant' ? [a, b] : [b, a];
+    check(await until(giant, () => game.loco.scale === 2 && game.loco.power === 1), 'the giant is 2x size');
+    check(await until(hider, () => game.loco.scale === 0.25 && game.loco.power === 3), 'the hider is 0.25x size with 3x power');
+    check(await giant.evaluate(() => game.hud.blind === true), 'the giant cannot see while they hide');
+    check(await hider.evaluate(() => game.hud.blind === false), 'the hider can see');
+    check(await giant.evaluate(() => game.session.canBreak() === false), 'nobody can smash during hiding');
+    const gy = await giant.evaluate(() => game.loco.head.toArray());
+    await giant.screenshot({ path: path.join(out, 'mp-giant-waiting.png') });
+    check(await until(a, () => game.session.round.phase === 'hunt', null, 60000), 'hiding time ended and the hunt began');
+    check(await until(giant, () => game.hud.blind === false && game.session.canBreak() === true), 'the giant can see and smash now');
+    check(await until(hider, () => game.session.round.phase === 'hunt' && game.session.canBreak() === false), 'the hider still cannot smash');
+    // each sees the other at the right size
+    check(await until(giant, () => { const p = [...game.session.players.values()][0]; return p.cur && Math.abs(p.cur[21] - 0.25) < 0.02 && !p.avatar.label.visible; }), 'the giant sees a tiny hider with no name tag');
+    check(await until(hider, () => { const p = [...game.session.players.values()][0]; return p.cur && Math.abs(p.cur[21] - 2) < 0.05; }), 'the hider sees a giant');
+    // the giant smashes the fountain; the hider sees it break
+    const before = await hider.evaluate(() => game.voxels.count());
+    check(await giant.evaluate(`(${P})(0, 2.2, 0, 1.0)`), 'the giant breaks something');
+    check(await until(hider, n => game.voxels.count() < n, before), 'the hider sees it break');
+    check(!(await hider.evaluate(`(${P})(8, 1, -6, 0.8)`)), 'a hider\'s punch does nothing');
+    // a view of the hunt from the hider's side
+    await hider.evaluate(() => { game.desktop.yaw = Math.PI; game.desktop.pitch = 0.5; });
+    await hider.waitForTimeout(600);
+    await hider.screenshot({ path: path.join(out, 'mp-hider-view.png') });
+    // the hider runs into the giant's hand: caught, and with nobody left the giant wins
+    const hand = await giant.evaluate(() => game.loco.hands[1].pos.toArray());
+    await hider.evaluate(h => { game.loco.teleport(new game.THREE.Vector3(h[0], h[1] - 0.2 - 1.5 * 0.25 + 0.0, h[2])); }, hand);
+    check(await until(a, () => game.session.round.phase === 'over' && game.session.round.winner === 'giant', null, 30000), 'the hider was caught and the giant won');
+    check(await until(hider, () => game.session.round.out.length === 1), 'the hider is marked as caught');
+    // next round: the map is repaired and the roles swap
+    check(await until(a, () => game.session.round.phase === 'hide' && game.session.round.n === 2, null, 60000), 'the next round started');
+    check(await until(hider, () => game.session.role() === 'giant' && game.loco.scale === 2, null, 20000), 'last round\'s hider is the giant now');
+    check(await until(giant, () => game.session.role() === 'hider' && game.loco.scale === 0.25, null, 20000), 'and the giant is hiding');
+    check(await until(giant, () => game.voxels.solidAt(0.4, 2.3, 0.4)), 'the fountain is whole again');
+    check(await same(), 'both worlds match after the repair');
+    // back to sandbox: everyone returns to normal size
+    await a.evaluate(() => game.session.setMode('sandbox'));
+    check(await until(b, () => game.session.mode === 'sandbox' && game.loco.scale === 2 && game.voxels.solidAt(-24, 6, -24)), 'back in the sandbox, at the 2x size the friend had picked there');
+    check(await until(a, () => game.loco.scale === 1 && game.session.role() === 'free'), 'host is back to normal too');
 
     // friend leaves; host's room empties
     await b.evaluate(() => game.session.leave());

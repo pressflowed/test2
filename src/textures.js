@@ -145,6 +145,51 @@ const PAINT = {
     g.fillStyle = '#5f6b74';
     for (const [x, y] of [[.1, .1], [.9, .1], [.1, .9], [.9, .9]]) { g.beginPath(); g.arc(x * s, y * s, s * 0.03, 0, 7); g.fill(); }
   },
+  brick(g, s) {
+    const r = rng(83), rows = 8, h = s / rows, w = s / 4;
+    g.fillStyle = '#cdbfae'; g.fillRect(0, 0, s, s);   // mortar
+    for (let j = 0; j < rows; j++) for (let i = -1; i < 4; i++) {
+      const x = i * w + (j % 2) * w / 2;
+      g.fillStyle = `hsl(${10 + r() * 10}, ${42 + r() * 14}%, ${34 + r() * 12}%)`;
+      g.fillRect(x + 2, j * h + 2, w - 4, h - 4);
+      g.fillStyle = 'rgba(255,255,255,.08)'; g.fillRect(x + 2, j * h + 2, w - 4, 3);
+    }
+    speckle(g, s, r, 400, ['#5a2a20', '#d8a090'], 0.6, 1.8, 0.3);
+  },
+  roof(g, s) { // overlapping tiles
+    const r = rng(89), rows = 6, h = s / rows, w = s / 6;
+    g.fillStyle = '#5a2a24'; g.fillRect(0, 0, s, s);
+    for (let j = 0; j < rows; j++) for (let i = -1; i < 6; i++) {
+      const x = i * w + (j % 2) * w / 2, y = j * h;
+      g.fillStyle = `hsl(${6 + r() * 8}, ${45 + r() * 10}%, ${30 + r() * 10}%)`;
+      g.beginPath(); g.moveTo(x + 2, y); g.lineTo(x + w - 2, y); g.lineTo(x + w - 2, y + h * 0.7); g.arc(x + w / 2, y + h * 0.7, w / 2 - 2, 0, Math.PI); g.closePath(); g.fill();
+      g.fillStyle = 'rgba(0,0,0,.25)'; g.fillRect(x + 2, y, w - 4, 3);
+    }
+  },
+  hay(g, s) {
+    const r = rng(97);
+    g.fillStyle = '#d2ab45'; g.fillRect(0, 0, s, s);
+    g.lineCap = 'round';
+    for (let i = 0; i < 1800; i++) {
+      const x = r() * s, y = r() * s, len = 8 + r() * 22, a = (r() - 0.5) * 0.7;
+      g.strokeStyle = ['#b98c2e', '#ecd070', '#c79c38', '#f5e08a', '#a67c26'][Math.floor(r() * 5)];
+      g.globalAlpha = 0.7; g.lineWidth = 1 + r() * 1.5;
+      wrap(s, x, y, 24, (px, py) => { g.beginPath(); g.moveTo(px, py); g.lineTo(px + Math.cos(a) * len, py + Math.sin(a) * len); g.stroke(); });
+    }
+    g.globalAlpha = 1;
+  },
+  plaster(g, s) {
+    const r = rng(101);
+    g.fillStyle = '#e4d9c0'; g.fillRect(0, 0, s, s);
+    speckle(g, s, r, 90, ['#d6c9ad', '#efe6d2', '#cfc0a2'], 10, 36, 0.35);
+    speckle(g, s, r, 500, ['#bfae8e', '#f6efe0'], 0.6, 1.6, 0.4);
+  },
+  dirt(g, s) {
+    const r = rng(103);
+    g.fillStyle = '#765639'; g.fillRect(0, 0, s, s);
+    speckle(g, s, r, 120, ['#68492f', '#866545', '#5c4029'], 8, 30, 0.4);
+    speckle(g, s, r, 700, ['#4a3320', '#9a7a58', '#8d8478'], 0.8, 2.6, 0.6);
+  },
 
   // ---- props (not tiled across the world, drawn once per face or wrapped round)
   ball(g, s) {
@@ -271,4 +316,31 @@ export function cloudTexture() {
     }, false);
   }
   return cache._cloud;
+}
+
+/**
+ * Several textures stacked into one array texture (one layer each), so the whole voxel
+ * world can be drawn with a single material. Layer 0 is plain white.
+ */
+export function textureArray(names, size = 256) {
+  if (!HAS_DOM) return null;
+  const data = new Uint8Array(size * size * 4 * (names.length + 1));
+  data.fill(255, 0, size * size * 4);
+  names.forEach((name, n) => {
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = size;
+    const g = cv.getContext('2d', { willReadFrequently: true });
+    (PAINT[ALIAS[name] || name] || PAINT.rock)(g, size);
+    data.set(g.getImageData(0, 0, size, size).data, (n + 1) * size * size * 4);
+  });
+  const tex = new THREE.DataArrayTexture(data, size, size, names.length + 1);
+  tex.format = THREE.RGBAFormat;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
+  tex.anisotropy = 4;
+  tex.needsUpdate = true;
+  return tex;
 }

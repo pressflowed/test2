@@ -83,3 +83,16 @@ How it's driven in VR:
 - `Hand_L/R` follow the controllers.
 - The upper arm and forearm are solved with 2-bone IK between shoulder and wrist.
 - In first person, your own head is hidden.
+
+
+## Where it stands now
+
+The plan above was the starting point. What exists today, in the order it was built:
+
+1. Arm-push movement in VR, with a skeleton body (phase 1).
+2. A 70 m map, physics props and a sandbox (in place of the tag game first planned).
+3. Multiplayer rooms over WebRTC (phase 4, done early).
+4. An arm menu, textures and sky, player size and power.
+5. A breakable voxel world, and a hide and seek mode with its own map.
+
+Still open from the original plan: bots, voice chat, and a measured performance pass on Quest 2.

@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { World } from '../src/physics.js';
 import { PropWorld } from '../src/props.js';
 import { Locomotion } from '../src/locomotion.js';
+import { VoxelWorld } from '../src/voxels.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const DT = 1 / 72;
@@ -13,7 +14,7 @@ function setup(simulate = true) {
   const world = new World();
   world.addBox(0, -1, 0, 40, 1, 40, 'grass');
   const scene = new THREE.Scene();
-  return { world, scene, props: new PropWorld(scene, world.colliders, simulate) };
+  return { world, scene, props: new PropWorld(scene, world, simulate) };
 }
 const steps = (props, n) => { for (let i = 0; i < n; i++) props.step(DT); };
 
@@ -129,7 +130,7 @@ test('a seed thrown at a wall puts the prop in front of it, not inside', () => {
   const world = new World();
   world.addBox(0, -1, 0, 40, 1, 40, 'grass');
   world.addBox(0, 0, -5, 10, 6, 1, 'stone');   // wall face at z = -4.5
-  const props = new PropWorld(new THREE.Scene(), world.colliders, true);
+  const props = new PropWorld(new THREE.Scene(), world, true);
   props.throwSeed('bigcrate', V(0, 1.5, 0), V(0, 3, -12), 'h');
   let frames = 0;
   while (props.seeds.size && frames++ < 400) props.step(DT);
@@ -177,4 +178,36 @@ test('fixed props stay square to the world so you stand where you see them', () 
   const p = props.spawn('wall', V(0, 1, 0), q);
   const size = p.col.max.clone().sub(p.col.min);
   assert.ok(Math.abs(size.y - 2) < 1e-6 && Math.min(size.x, size.z) < 0.31, `wall box ${size.toArray()}`);
+});
+
+test('props rest on voxel blocks and fall when the blocks under them break', () => {
+  const world = new World();
+  world.addBox(0, -1, 0, 40, 1, 40, 'grass');
+  world.voxels = new VoxelWorld(64, 32, 64, -8, 0, -8);
+  world.voxels.box(0, 0, 0, 2, 2, 2, 'rock');
+  world.voxels.finalize();
+  const props = new PropWorld(new THREE.Scene(), world, true);
+  world.voxels.onCells = cells => props.syncCells(cells);
+  const crate = props.spawn('crate', V(0, 2.6, 0));
+  steps(props, 200);
+  assert.ok(Math.abs(crate.mesh.position.y - 2.275) < 0.03, `resting on the block at y ${crate.mesh.position.y}`);
+  // smash the block out from under it
+  for (const y of [1.8, 1.2, 0.6, 0.2]) world.voxels.carve(0, y, 0, 1.6);
+  steps(props, 200);
+  assert.ok(crate.mesh.position.y < 0.6, `fell to y ${crate.mesh.position.y}`);
+});
+
+test('a thrown seed lands on voxel blocks', () => {
+  const world = new World();
+  world.addBox(0, -1, 0, 40, 1, 40, 'grass');
+  world.voxels = new VoxelWorld(64, 32, 64, -8, 0, -8);
+  world.voxels.box(0, 0, -4, 6, 3, 2, 'stone');   // top at y = 3
+  world.voxels.finalize();
+  const props = new PropWorld(new THREE.Scene(), world, true);
+  props.throwSeed('crate', V(0, 4.5, 0), V(0, 1, -5), 'h');
+  let frames = 0;
+  while (props.seeds.size && frames++ < 400) props.step(DT);
+  steps(props, 200);
+  const crate = [...props.props.values()][0];
+  assert.ok(Math.abs(crate.mesh.position.y - 3.275) < 0.05 && crate.mesh.position.z < -3, `on top of the wall: ${crate.mesh.position.toArray()}`);
 });

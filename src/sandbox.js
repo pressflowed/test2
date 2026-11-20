@@ -1,4 +1,4 @@
-// The sandbox map: things to run on, jump between and climb.
+// Scenery that cannot be broken: the lawn, the border walls, the sandbox control panel and board.
 import * as THREE from 'three';
 import { texture } from './textures.js';
 
@@ -8,102 +8,36 @@ const SURFACE = {
   rock: [0xffffff, 3], stone: [0xffffff, 2.4], leaf: [0xffffff, 2], crate: [0xffffff, 1.2], metal: [0xffffff, 1],
 };
 
-// The map is a square MAP metres on a side (70 m: about 12x the area of the first 20 m room).
+// The map is a square MAP metres on a side.
 export const MAP = 70;
 
-export function buildSandbox(scene, world) {
-  const boxes = [];
-  const box = (cx, by, cz, w, h, d, kind, visible = true) => {
-    world.addBox(cx, by, cz, w, h, d, kind);
-    if (visible) boxes.push({ cx, by, cz, w, h, d, kind });
+/**
+ * The parts of the world that never break: the lawn, the border walls, and (in sandbox
+ * mode) the control panel and info board. Everything else is voxels, see maps.js.
+ */
+export function buildScenery(scene, world) {
+  const half = MAP / 2, H = 8;
+  const walls = [];
+  const wall = (cx, cz, w, d) => {
+    world.addBox(cx, 0, cz, w, 40, d, 'stone');            // collides far above what you see, so nobody leaps out
+    walls.push({ cx, by: 0, cz, w, h: H, d, kind: 'stone' });
   };
-  const half = MAP / 2;
+  world.addBox(0, -1, 0, MAP + 2, 1, MAP + 2, 'grass');    // the floor
+  wall(0, -half - 0.5, MAP + 2, 1); wall(0, half + 0.5, MAP + 2, 1);
+  wall(-half - 0.5, 0, 1, MAP); wall(half + 0.5, 0, 1, MAP);
+  for (const mesh of mergeBoxes(walls)) scene.add(mesh);
+  scene.add(grassFloor(MAP + 2));
+  const baseStatics = world.statics.slice();
 
-  // ground and outer walls
-  box(0, -1, 0, MAP + 2, 1, MAP + 2, 'grass', false);   // floor collider (drawn separately with a grid)
-  const H = 8;
-  box(0, 0, -half - 0.5, MAP + 2, H, 1, 'stone');
-  box(0, 0, half + 0.5, MAP + 2, H, 1, 'stone');
-  box(-half - 0.5, 0, 0, 1, H, MAP, 'stone');
-  box(half + 0.5, 0, 0, 1, H, MAP, 'stone');
-
-  // ---- centre: the original test course
-  for (let i = 0; i < 5; i++) box(-6, 0, -1 - i * 1.2, 3, 0.35 * (i + 1), 1.2, 'wood');  // stairs
-  box(-6, 0, -8.2, 3, 1.75, 3.2, 'wood');                                               // deck
-  box(0, 0, -3.2, 2, 0.9, 2, 'plank');                                                  // gap jump
-  box(0, 0, -7.2, 2, 1.2, 2, 'plank');
-  box(4.5, 0, -5, 1, 5, 1, 'rock');                                                     // pillar
-  box(4.5, 5, -5, 1.8, 0.2, 1.8, 'plank');
-  box(8.6, 0, 1, 2.8, 3.4, 4, 'rock');                                                  // climbing wall
-  box(6.95, 1.6, 1, 0.5, 0.2, 3, 'plank');
-  box(4, 0, 4, 0.4, 2.6, 0.4, 'wood');                                                  // posts
-  box(5.6, 0, 2.6, 0.4, 2.6, 0.4, 'wood');
-  box(4, 0, 1.2, 0.4, 2.6, 0.4, 'wood');
-  box(-8.6, 0, 4.5, 0.3, 1.2, 3.2, 'wood');                                             // tunnel
-  box(-6.9, 0, 4.5, 0.3, 1.2, 3.2, 'wood');
-  box(-7.75, 1.2, 4.5, 2.0, 0.2, 3.2, 'plank');
-
-  // ---- north-east: tall trees with decks and bridges
-  const trees = [[18, -18], [28, -18], [18, -28], [28, -28]];
-  for (const [x, z] of trees) {
-    box(x, 0, z, 1.3, 14, 1.3, 'wood');
-    box(x, 4, z, 4, 0.3, 4, 'plank');
-    box(x, 8, z, 3.4, 0.3, 3.4, 'plank');
-    box(x, 11.5, z, 3, 0.3, 3, 'plank');
-    box(x, 13.4, z, 6, 2.4, 6, 'leaf');
+  // ---- sandbox only: control panel near the start (slap the buttons on top) and the info board
+  const extras = new THREE.Group();
+  scene.add(extras);
+  const stand = [];
+  for (const [cx, by, cz, w, h, d] of [[3.2, 0, 4.6, 0.6, 0.45, 2.6], [3.55, 0, 4.6, 0.12, 1.2, 2.6]]) {
+    world.addBox(cx, by, cz, w, h, d, 'stone');
+    stand.push({ cx, by, cz, w, h, d, kind: 'stone' });
   }
-  box(23, 8, -18, 6.6, 0.25, 1.2, 'plank');      // bridges at the middle decks
-  box(23, 8, -28, 6.6, 0.25, 1.2, 'plank');
-  box(18, 11.5, -23, 1.2, 0.25, 7, 'plank');     // and a high one
-  for (let i = 0; i < 4; i++) box(10.5 + i * 1.5, 0, -18, 1.2, 1 + i * 0.9, 1.2, 'crate'); // steps up to the first deck
-
-  // ---- north-west: a tower with ledges spiralling up
-  const tx = -24, tz = -24;
-  box(tx, 0, tz, 5, 14, 5, 'stone');
-  box(tx, 14, tz, 7.5, 0.4, 7.5, 'plank');
-  const sides = [[0, -1], [1, 0], [0, 1], [-1, 0]];
-  for (let k = 0; k < 7; k++) {
-    const [sx, sz] = sides[k % 4], y = 1.4 + k * 1.8;
-    if (sx) box(tx + sx * 3.2, y, tz, 1.4, 0.3, 4.2, 'plank');
-    else box(tx, y, tz + sz * 3.2, 4.2, 0.3, 1.4, 'plank');
-  }
-
-  // ---- south-east: posts to climb, then floating stepping stones up to a high perch
-  for (let i = 0; i < 5; i++) box(15 + i * 2.6, 0, 16, 1, 1 + i, 1, 'wood');
-  for (let i = 0; i < 8; i++) box(15 + i * 2.2, 1.2 + i * 0.9, 22 + i * 1.1, 2, 0.3, 2, 'plank');
-  box(32, 0, 32.5, 3, 8.5, 3, 'rock');
-
-  // ---- south-west: a terraced hill
-  for (const [w, h] of [[16, 1.2], [12, 2.4], [8, 3.6], [4.5, 4.8], [2, 6]]) box(-24, 0, 24, w, h, w, 'grass-dark');
-
-  // ---- south: a channel between two walls, for pushing off side to side
-  box(-3.2, 0, 24, 0.8, 4, 16, 'rock');
-  box(3.2, 0, 24, 0.8, 4, 16, 'rock');
-
-  // ---- east: tall blocks with gaps to leap across
-  [15, 19.5, 24.5, 30].forEach((x, i) => box(x, 0, 0, 2.6, 2.5 + i * 0.5, 2.6, 'rock'));
-
-  // ---- west: a field of crates and boulders (fixed layout)
-  let seed = 7;
-  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  for (let i = 0; i < 18; i++) {
-    const w = 1 + rnd() * 2.2, h = 0.6 + rnd() * 2.6;
-    box(-15 - rnd() * 17, 0, -9 + rnd() * 18, w, h, 1 + rnd() * 2.2, rnd() < 0.5 ? 'crate' : 'rock');
-  }
-
-  // ---- north wall: an uneven cliff to climb
-  for (let i = 0; i < 9; i++) {
-    const x = -12 + i * 3;
-    box(x, 0, -half + 1.5, 3, 3 + ((i * 5) % 7), 2 + (i % 3) * 0.6, 'rock');
-  }
-
-  for (const mesh of mergeBoxes(boxes)) scene.add(mesh);
-  scene.add(grassFloor(MAP));
-  scene.add(grassTufts(MAP, world.colliders));
-
-  // ---- control panel near the start: slap the buttons on top
-  box(3.2, 0, 4.6, 0.6, 0.45, 2.6, 'stone');
-  box(3.55, 0, 4.6, 0.12, 1.2, 2.6, 'stone');
+  for (const mesh of mergeBoxes(stand)) extras.add(mesh);
   const buttons = PANEL.map((b, i) => {
     const z = 3.75 + i * 0.85;
     const col = world.addBox(3.15, 0.45, z, 0.34, 0.1, 0.55, 'metal');
@@ -111,20 +45,33 @@ export function buildSandbox(scene, world) {
     const mat = new THREE.MeshLambertMaterial({ color: b.color, emissive: 0x000000 });
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.1, 0.55), mat);
     mesh.position.set(3.15, 0.5, z);
-    scene.add(mesh);
+    extras.add(mesh);
     return { ...b, col, mesh, mat };
   });
   const labels = makePanelLabels();
   labels.position.set(3.48, 0.86, 4.6);
   labels.rotation.y = -Math.PI / 2;
-  scene.add(labels);
-
+  extras.add(labels);
   const board = makeBoard();
   board.mesh.position.set(-2.4, 1.35, 3.6);
   board.mesh.rotation.y = 0.45;
-  scene.add(board.mesh);
+  extras.add(board.mesh);
+  const sandboxStatics = world.statics.slice();
 
-  return { spawn: new THREE.Vector3(0, 0, 6), spawnYaw: 0, board, buttons };
+  const tufts = grassTufts();
+  scene.add(tufts);
+
+  return {
+    board, buttons,
+    /** Switch the unbreakable scenery to suit a map, and regrow the grass around it. */
+    setMap(mode) {
+      const sandbox = mode === 'sandbox';
+      extras.visible = sandbox;
+      world.statics = sandbox ? sandboxStatics : baseStatics;
+      world.colliders = world.statics.slice();
+      plantTufts(tufts, MAP, world);
+    },
+  };
 }
 
 export const PANEL = [
@@ -211,19 +158,24 @@ function grassFloor(size) {
 }
 
 // Little grass blades scattered over open ground, all in one draw call.
-function grassTufts(size, colliders) {
+const TUFTS = 2400;
+function grassTufts() {
   const blade = new THREE.ConeGeometry(0.022, 0.16, 3);
   blade.translate(0, 0.08, 0);
-  const count = 2400;
-  const mesh = new THREE.InstancedMesh(blade, new THREE.MeshLambertMaterial({ color: 0xffffff }), count);
+  const mesh = new THREE.InstancedMesh(blade, new THREE.MeshLambertMaterial({ color: 0xffffff }), TUFTS);
+  mesh.count = 0;
+  return mesh;
+}
+function plantTufts(mesh, size, world) {
   let seed = 17;
   const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), p = new THREE.Vector3(), sc = new THREE.Vector3(), c = new THREE.Color();
   let n = 0;
-  for (let tries = 0; n < count && tries < count * 4; tries++) {
+  for (let tries = 0; n < TUFTS && tries < TUFTS * 5; tries++) {
     p.set((rnd() - 0.5) * (size - 1), 0, (rnd() - 0.5) * (size - 1));
-    // not inside or under things sitting on the ground
-    if (colliders.some(b => b.max.y > 0.05 && b.min.y < 0.3 && p.x > b.min.x - 0.1 && p.x < b.max.x + 0.1 && p.z > b.min.z - 0.1 && p.z < b.max.z + 0.1)) continue;
+    // not where something stands on the ground
+    if (world.voxels && world.voxels.solidAt(p.x, 0.1, p.z)) continue;
+    if (world.statics.some(b => b.max.y > 0.05 && b.min.y < 0.3 && p.x > b.min.x - 0.1 && p.x < b.max.x + 0.1 && p.z > b.min.z - 0.1 && p.z < b.max.z + 0.1)) continue;
     q.setFromEuler(e.set((rnd() - 0.5) * 0.5, rnd() * 6.28, (rnd() - 0.5) * 0.5));
     const k = 0.5 + rnd() * 1.1;
     mesh.setMatrixAt(n, m.compose(p, q, sc.set(k, k * (0.7 + rnd() * 0.8), k)));
@@ -231,7 +183,8 @@ function grassTufts(size, colliders) {
     n++;
   }
   mesh.count = n;
-  return mesh;
+  mesh.instanceMatrix.needsUpdate = true;
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
 }
 
 // A sign with controls and live numbers for tuning the feel.
@@ -252,12 +205,12 @@ function makeBoard() {
     g.fillStyle = '#f4eed6'; g.font = '36px sans-serif';
     const lines = s.mode === 'vr' ? [
       'Push the ground down and back to move.',
-      'Arm menu (X): grab an item and throw it.',
-      'Grip: grab and throw   Left trigger: delete',
-      'Right trigger: quick spawn   B: undo   Y: start',
+      'Punch hard to smash things. Arm menu: X.',
+      'Grab an item from the menu and throw it.',
+      'Grip: grab   Left trigger: delete   Y: start',
     ] : [
       'Hold left / right click and drag down to push.',
-      'F: throw item   1-8 / wheel: pick   M: menu',
+      'J: punch   F: throw item   M: menu   T: tab',
       'G (hold): grab   X: delete   Z: undo   R: start',
     ];
     lines.forEach((t, i) => g.fillText(t, 44, 170 + i * 56));

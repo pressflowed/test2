@@ -74,3 +74,46 @@ export function boom(vol = 1) {
     s.connect(lp).connect(g2).connect(ac.destination); s.start(t + i * 0.09); s.stop(t + i * 0.09 + 0.15);
   }
 }
+
+// what breaking each kind of surface sounds like: [filter Hz, thump Hz]
+const CRUNCH = { leaf: [3200, 0], grass: [900, 70], wood: [1500, 110], plank: [1800, 130], crate: [1700, 120], rock: [2400, 80], stone: [2600, 70] };
+
+/** Blocks breaking. kind is the surface, vol 0..1. */
+export function crunch(kind, vol = 1) {
+  if (!ac || vol < 0.02) return;
+  const [cut, thump] = CRUNCH[kind] || CRUNCH.rock;
+  const t = ac.currentTime;
+  for (let i = 0; i < 3; i++) {
+    const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+    s.buffer = noise; f.type = 'bandpass'; f.frequency.value = cut * (0.7 + Math.random() * 0.6); f.Q.value = 0.7;
+    const at = t + i * 0.045;
+    g.gain.setValueAtTime(0.55 * vol, at);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 0.13);
+    s.connect(f).connect(g).connect(ac.destination); s.start(at); s.stop(at + 0.14);
+  }
+  if (thump) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(thump * 1.6, t);
+    o.frequency.exponentialRampToValueAtTime(thump * 0.5, t + 0.18);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.6 * vol, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+    o.connect(g).connect(ac.destination); o.start(t); o.stop(t + 0.27);
+  }
+}
+
+/** A short tune of notes (Hz), for round events. */
+export function jingle(notes, vol = 0.5) {
+  if (!ac) return;
+  const t = ac.currentTime;
+  notes.forEach((f, i) => {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'triangle'; o.frequency.value = f;
+    const at = t + i * 0.13;
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(0.22 * vol, at + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 0.28);
+    o.connect(g).connect(ac.destination); o.start(at); o.stop(at + 0.3);
+  });
+}

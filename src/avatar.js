@@ -66,6 +66,16 @@ export class Avatar {
 
   setColor(hex) { this.material.color.setHex(hex); }
 
+  /** Caught players fade to see-through ghosts. */
+  setGhost(on) {
+    if (this._ghost === on) return;
+    this._ghost = on;
+    this.material.transparent = on;
+    this.material.opacity = on ? 0.28 : 1;
+    this.material.depthWrite = !on;
+    this.material.needsUpdate = true;
+  }
+
   /** Floating name tag above the head. */
   setName(name) {
     if (this.label) { this.root.remove(this.label); this.label.material.map.dispose(); this.label.material.dispose(); }
