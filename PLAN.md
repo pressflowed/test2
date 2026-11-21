@@ -96,5 +96,6 @@ The plan above was the starting point. What exists today, in the order it was bu
 5. A breakable voxel world, and a hide and seek mode with its own map.
 6. Voice chat by distance, and giants that shake the ground.
 7. A flesh body over the skeleton (sandbox): blood, punches, arms that can be knocked or torn off, dying and coming back, and dummy bots to try it on.
+8. More gore (heads come off, corpses are ragdolls), weapons, and an arena mode: a knockout tournament in a colosseum, with gladiator bots that fight back.
 
-Still open from the original plan: bots that actually play (the dummies only hop about), and a measured performance pass on Quest 2.
+Still open from the original plan: bots that play tag or hide and seek, and a measured performance pass on Quest 2.

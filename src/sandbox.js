@@ -1,6 +1,10 @@
-// Scenery that cannot be broken: the lawn, the border walls, the sandbox control panel and board.
+// Scenery that cannot be broken: the lawn, the border walls, the sandbox control panel
+// and board, and the arena's gates and bracket boards.
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { texture } from './textures.js';
+import { COLOSSEUM } from './maps.js';
+import { roundName } from './arena.js';
 
 // Per surface: tint over its texture, and how many metres one repeat of the texture covers.
 const SURFACE = {
@@ -58,20 +62,124 @@ export function buildScenery(scene, world) {
   extras.add(board.mesh);
   const sandboxStatics = world.statics.slice();
 
+  // ---- arena only: the two gates, and a bracket board over each
+  const arena = new THREE.Group();
+  arena.visible = false;
+  scene.add(arena);
+  const gates = makeGates();
+  arena.add(gates);
+  const bracket = makeBracket();
+  for (const b of COLOSSEUM.boards) {
+    const m = new THREE.Mesh(bracket.mesh.geometry, bracket.mesh.material);
+    m.position.fromArray(b.pos); m.rotation.y = b.yaw;
+    arena.add(m);
+  }
+  let gateCols = [], gatesOpen = true, map = 'sandbox';
+
   const tufts = grassTufts();
   scene.add(tufts);
 
   return {
-    board, buttons,
+    board, buttons, bracket,
+    get gatesOpen() { return gatesOpen; },
     /** Switch the unbreakable scenery to suit a map, and regrow the grass around it. */
     setMap(mode) {
-      const sandbox = mode === 'sandbox';
-      extras.visible = sandbox;
-      world.statics = sandbox ? sandboxStatics : baseStatics;
+      map = mode;
+      extras.visible = mode === 'sandbox';
+      arena.visible = mode === 'arena';
+      for (const c of gateCols) c.dead = true;
+      gateCols = []; gatesOpen = true; gates.position.y = GATE_DROP;
+      world.statics = mode === 'sandbox' ? sandboxStatics : baseStatics;
       world.colliders = world.statics.slice();
       plantTufts(tufts, MAP, world);
     },
+    /** Arena: shut the gates (nobody gets through) or let them drop into the ground. */
+    setGates(open) {
+      if (map !== 'arena') open = true;
+      if (open === gatesOpen) return;
+      gatesOpen = open;
+      for (const c of gateCols) c.dead = true;            // a hand resting on a gate lets go when it moves
+      gateCols = open ? [] : COLOSSEUM.gates.map(([cx, by, cz, w, h, d]) => ({
+        min: new THREE.Vector3(cx - w / 2, by, cz - d / 2), max: new THREE.Vector3(cx + w / 2, by + h, cz + d / 2), kind: 'metal', noProps: true,
+      }));
+      world.statics = baseStatics.concat(gateCols);
+      world.colliders = world.statics.slice();
+    },
+    /** Every frame: the gates slide. */
+    update(dt) {
+      const want = gatesOpen ? GATE_DROP : 0;
+      if (gates.position.y !== want) gates.position.y += Math.sign(want - gates.position.y) * Math.min(Math.abs(want - gates.position.y), dt * 5);
+    },
   };
+}
+
+// The gates: iron bars, both in one mesh. They drop into the ground to open.
+const GATE_DROP = -2.9;
+function makeGates() {
+  const parts = [];
+  for (const [cx, by, cz, w, h] of COLOSSEUM.gates) {
+    for (let x = -w / 2 + 0.125; x < w / 2; x += 0.25) parts.push(new THREE.BoxGeometry(0.06, h, 0.06).translate(cx + x, by + h / 2, cz));
+    for (const y of [0.35, h / 2, h - 0.2]) parts.push(new THREE.BoxGeometry(w, 0.08, 0.09).translate(cx, by + y, cz));
+  }
+  const mesh = new THREE.Mesh(mergeGeometries(parts), new THREE.MeshLambertMaterial({ color: 0x33383f }));
+  for (const g of parts) g.dispose();
+  mesh.position.y = GATE_DROP;
+  return mesh;
+}
+
+// The bracket: who fights whom, round by round, and who won.
+function makeBracket() {
+  const cv = document.createElement('canvas');
+  cv.width = 1024; cv.height = 512;
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(7, 3.5), new THREE.MeshBasicMaterial({ map: tex, fog: false }));
+  const g = cv.getContext('2d');
+  let lastKey = '';
+  /**
+   * @param st      the tournament (see Tournament.public in arena.js)
+   * @param nameOf  id -> name
+   * @param line    what is going on right now, in a few words
+   */
+  function draw(st, nameOf, line) {
+    const key = JSON.stringify([st.phase, st.rounds, st.r, st.m, st.champion, line, st.rounds.flat().map(m => [nameOf(m[0]), nameOf(m[1])])]);
+    if (key === lastKey) return;
+    lastKey = key;
+    g.fillStyle = '#13241b'; g.fillRect(0, 0, 1024, 512);
+    g.strokeStyle = '#d4a73a'; g.lineWidth = 8; g.strokeRect(6, 6, 1012, 500);
+    g.textBaseline = 'middle'; g.textAlign = 'left';
+    g.fillStyle = '#d4a73a'; g.font = 'bold 50px sans-serif'; g.fillText(st.phase === 'waiting' ? 'THE ARENA' : `TOURNAMENT ${st.n}`, 34, 50);
+    g.fillStyle = '#f4eed6'; g.font = 'bold 38px sans-serif'; g.textAlign = 'right'; g.fillText(line, 990, 52);
+    g.textAlign = 'left';
+    // the first round decides how many rounds there will be: draw the ones still to come as empty boxes
+    const rounds = st.rounds.slice();
+    while (rounds.length && rounds.at(-1).length > 1) rounds.push(Array.from({ length: rounds.at(-1).length / 2 }, () => [null, null, null]));
+    const w = Math.min(440, 960 / Math.max(rounds.length, 1) - 20);
+    rounds.forEach((ms, r) => {
+      const x = 34 + r * (960 / rounds.length), rowH = 400 / ms.length;
+      g.fillStyle = '#b9c4a8'; g.font = 'bold 24px sans-serif'; g.fillText(roundName(ms.length), x, 98);
+      ms.forEach(([a, b, win], m) => {
+        // the fewer the matches, the bigger the names
+        const y = 118 + m * rowH + rowH / 2, h = Math.min(86, rowH / 2 - 10), now = r === st.r && m === st.m && (st.phase === 'prep' || st.phase === 'fight' || st.phase === 'result');
+        [a, b].forEach((id, k) => {
+          const yy = y + (k ? h / 2 + 2 : -h / 2 - 2);
+          g.fillStyle = now ? '#2f5a3c' : '#1d3628'; g.fillRect(x, yy - h / 2, w, h);
+          if (id == null) return;
+          g.fillStyle = win == null ? '#f4eed6' : win === id ? '#9be15d' : '#7c8672';
+          g.font = `bold ${Math.round(h * 0.62)}px sans-serif`;
+          let name = nameOf(id);
+          while (name.length > 3 && g.measureText(name).width > w - 24) name = name.slice(0, -1);
+          g.fillText(name, x + 12, yy + 2);
+          if (win != null && win !== id) { g.strokeStyle = '#7c8672'; g.lineWidth = 3; g.beginPath(); g.moveTo(x + 8, yy); g.lineTo(x + 16 + g.measureText(name).width, yy); g.stroke(); }
+        });
+        if (now) { g.strokeStyle = '#d4a73a'; g.lineWidth = 4; g.strokeRect(x - 3, y - h - 5, w + 6, h * 2 + 10); }
+      });
+    });
+    if (st.phase === 'waiting') { g.fillStyle = '#b9c4a8'; g.font = 'bold 40px sans-serif'; g.textAlign = 'center'; g.fillText('Waiting for fighters', 512, 270); }
+    tex.needsUpdate = true;
+  }
+  draw({ phase: 'waiting', rounds: [], n: 0, r: 0, m: 0, champion: null }, () => '', '');
+  return { mesh, draw };
 }
 
 export const PANEL = [

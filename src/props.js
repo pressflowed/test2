@@ -6,7 +6,8 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { sdBox, near, pushOut } from './physics.js';
 import { texture } from './textures.js';
-import { makeGib } from './gibs.js';
+import { makeGib, LOOSE } from './gibs.js';
+import { WEAPONS, weaponVisual, weaponHold } from './weapons.js';
 
 // size: box [x, y, z]; sphere r; cylinder r, h (rTop for cones and pins)
 // climb:  players' hands and bodies collide with it (you can stand on it). Otherwise
@@ -38,6 +39,9 @@ export const PROP_TYPES = [
   { id: 'wall', label: 'Wall', shape: 'box', size: [3, 2, 0.3], mass: 0, color: 0x7b827c, climb: true, fixed: true },
   { id: 'pillar', label: 'Pillar', shape: 'box', size: [0.6, 3, 0.6], mass: 0, color: 0x7b827c, climb: true, fixed: true },
   { id: 'beam', label: 'Beam', shape: 'box', size: [4, 0.3, 0.4], mass: 0, color: 0x8a5e36, climb: true, fixed: true },
+  { id: 'table', label: 'Table', shape: 'box', size: [1.6, 0.75, 0.9], mass: 30, color: 0x9a6a3c, climb: true },
+  // weapons: swing the business end into somebody (see weapons.js)
+  ...Object.entries(WEAPONS).map(([id, w]) => ({ id, label: w.label, shape: 'box', size: w.size, mass: w.mass, color: 0xcfd6dc, weapon: w })),
   // body pieces: not in the spawn menu; they appear when someone loses a limb or dies, and fade after a while
   { id: 'gib_head', label: 'Head', shape: 'sphere', r: 0.11, mass: 4, color: 0xe0ac86, bounce: 0.35, gib: true },
   { id: 'gib_torso', label: 'Body', shape: 'box', size: [0.42, 0.66, 0.22], mass: 25, color: 0xe0ac86, gib: true },
@@ -48,13 +52,16 @@ export const PROP_TYPES = [
 /** What the spawn menu offers. */
 export const SPAWNABLE = PROP_TYPES.filter(t => !t.gib);
 export const GIB_LIFE = 45;   // seconds a body piece lies around
-export const MAX_GIBS = 24;   // more than this and the oldest goes
+export const MAX_GIBS = 40;   // more than this and the oldest goes (a whole body at a time)
 export const TYPE = Object.fromEntries(PROP_TYPES.map(t => [t.id, t]));
 
 export const MAX_PROPS = 90;
 export const BLAST_RADIUS = 6;
 
 const G_STATIC = 1, G_LIGHT = 2, G_HEAVY = 4, G_HAND = 8;
+// The pieces of one dead body are jointed together and must not collide with each other,
+// so each body gets one of these groups to itself (they are handed out in turn).
+const RAG0 = 16, RAGS = 8, ALL_RAG = ((1 << RAGS) - 1) * RAG0;
 
 function halfExtents(t) {
   if (t.shape === 'box') return new THREE.Vector3(t.size[0] / 2, t.size[1] / 2, t.size[2] / 2);
@@ -71,6 +78,7 @@ const visuals = {};
 export function propVisual(id) {
   if (!visuals[id]) {
     const t = TYPE[id];
+    if (t.weapon) return (visuals[id] = weaponVisual(id));
     let geo;
     if (t.shape === 'box') geo = new THREE.BoxGeometry(...t.size);
     else if (t.shape === 'sphere') geo = new THREE.SphereGeometry(t.r, 20, 14);
@@ -121,9 +129,11 @@ export class PropWorld {
       w.addContactMaterial(new CANNON.ContactMaterial(m, w.defaultMaterial, { friction: 0.4, restitution: t.bounce }));
       w.addContactMaterial(new CANNON.ContactMaterial(m, this.bouncyMat, { friction: 0.3, restitution: 0.95 }));
     }
+    this.joints = [];           // { c: constraint, a: prop id, b: prop id } holding dead bodies together
     for (const c of level.statics) {
+      if (c.noProps) continue;  // gates and the like: only players are stopped by them
       const half = new CANNON.Vec3((c.max.x - c.min.x) / 2, (c.max.y - c.min.y) / 2, (c.max.z - c.min.z) / 2);
-      const b = new CANNON.Body({ mass: 0, type: CANNON.Body.STATIC, collisionFilterGroup: G_STATIC, collisionFilterMask: G_LIGHT | G_HEAVY });
+      const b = new CANNON.Body({ mass: 0, type: CANNON.Body.STATIC, collisionFilterGroup: G_STATIC, collisionFilterMask: G_LIGHT | G_HEAVY | ALL_RAG });
       b.addShape(new CANNON.Box(half));
       b.position.set((c.min.x + c.max.x) / 2, (c.min.y + c.max.y) / 2, (c.min.z + c.max.z) / 2);
       w.addBody(b);
@@ -148,7 +158,7 @@ export class PropWorld {
       const old = this.cellBodies.get(cell.index);
       if (old) { this.world.removeBody(old); this.cellBodies.delete(cell.index); }
       if (!cell.boxes.length) continue;
-      const body = new CANNON.Body({ mass: 0, type: CANNON.Body.STATIC, collisionFilterGroup: G_STATIC, collisionFilterMask: G_LIGHT | G_HEAVY });
+      const body = new CANNON.Body({ mass: 0, type: CANNON.Body.STATIC, collisionFilterGroup: G_STATIC, collisionFilterMask: G_LIGHT | G_HEAVY | ALL_RAG });
       const o = cell.boxes[0].min;
       body.position.set(o.x, o.y, o.z);
       for (const b of cell.boxes) {
@@ -162,8 +172,11 @@ export class PropWorld {
   }
 
   // ---- props
-  /** scale only applies to body pieces: a giant's arm is a giant arm. */
-  spawn(typeId, pos, quat, { id, owner = null, vel = null, color = 0, scale = 1 } = {}) {
+  /**
+   * scale, wounds and rag only apply to body pieces: a giant's arm is a giant arm; wounds
+   * says which ends are raw (see gibs.js); rag is the number of the dead body it belongs to.
+   */
+  spawn(typeId, pos, quat, { id, owner = null, vel = null, color = 0, scale = 1, wounds = null, rag = 0 } = {}) {
     const t = TYPE[typeId];
     if (!t) return null;
     if (id == null) id = this.nextId++;
@@ -171,16 +184,19 @@ export class PropWorld {
     if (this.props.has(id)) return this.props.get(id);
 
     const { geo, mat } = propVisual(t.id);
-    const gib = t.gib ? makeGib(t.id, color || t.color) : null;       // a real body piece, in its owner's skin colour
+    if (t.gib && wounds == null) wounds = LOOSE[t.id] || 0;
+    const gib = t.gib ? makeGib(t.id, color || t.color, wounds) : null;       // a real body piece, in its owner's skin colour
     const mesh = gib || new THREE.Mesh(geo, t.fuse ? mat.clone() : mat);
     mesh.position.copy(pos);
     if (quat) mesh.quaternion.copy(quat);
+    if (t.weapon && owner !== 'rack') mesh.quaternion.multiply(_q.setFromAxisAngle(_n.set(0, 0, 1), 1.35));   // weapons come out lying down, not balanced on end
     if (t.fixed) snapYaw(mesh.quaternion);   // keeps the box you stand on matching what you see
     const size = t.gib ? Math.min(Math.max(scale || 1, 0.2), 4) : 1;
     mesh.scale.setScalar(t.gib ? size : 0.15);
     this.scene.add(mesh);
     const p = {
       id, type: t, owner, mesh, held: null, body: null, grow: t.gib ? 1 : 0, fuse: t.fuse || 0, color, size, life: t.gib ? GIB_LIFE : Infinity,
+      wounds: wounds || 0, rag, age: 0, shy: rag ? 0.35 : 0,   // shy: seconds before hands can shove a fresh corpse (the fist that killed it is still inside it)
       col: t.climb ? { min: new THREE.Vector3(), max: new THREE.Vector3(), delta: new THREE.Vector3(), kind: t.bouncy || t.launch ? 'pad' : 'wood', bouncy: t.bouncy || 0, launch: t.launch || 0, prop: id } : null,
       target: { pos: mesh.position.clone(), quat: mesh.quaternion.clone() },
     };
@@ -189,9 +205,10 @@ export class PropWorld {
         mass: t.fixed ? 0 : t.mass * size ** 3,
         type: t.fixed ? CANNON.Body.STATIC : CANNON.Body.DYNAMIC,
         material: t.bouncy ? this.bouncyMat : this.mats[t.id],
-        collisionFilterGroup: t.climb ? G_HEAVY : G_LIGHT,
-        collisionFilterMask: t.climb ? (G_STATIC | G_LIGHT | G_HEAVY) : (G_STATIC | G_LIGHT | G_HEAVY | G_HAND),
-        linearDamping: t.float ? 0.7 : 0.05, angularDamping: t.float ? 0.7 : 0.1,
+        collisionFilterGroup: rag ? RAG0 << (rag % RAGS) : t.climb ? G_HEAVY : G_LIGHT,
+        collisionFilterMask: rag ? (G_STATIC | G_LIGHT | G_HEAVY | (ALL_RAG & ~(RAG0 << (rag % RAGS))))
+          : t.climb ? (G_STATIC | G_LIGHT | G_HEAVY | ALL_RAG) : (G_STATIC | G_LIGHT | G_HEAVY | G_HAND | ALL_RAG),
+        linearDamping: t.float ? 0.7 : rag ? 0.12 : 0.05, angularDamping: t.float ? 0.7 : rag ? 0.5 : 0.1,
         sleepSpeedLimit: 0.15, sleepTimeLimit: 0.6,
         allowSleep: !t.float && !t.fuse,
       });
@@ -217,6 +234,31 @@ export class PropWorld {
     if (p.mesh.userData.dispose) p.mesh.userData.dispose();
     if (p.body) this.world.removeBody(p.body);
     this.props.delete(id);
+    if (this.joints.length) this.joints = this.joints.filter(j => {
+      if (j.a !== id && j.b !== id) return true;
+      this.world.removeConstraint(j.c);
+      return false;
+    });
+  }
+
+  /** Remove every piece of one dead body. */
+  removeGroup(rag) {
+    for (const p of [...this.props.values()]) if (p.rag === rag) this.remove(p.id);
+  }
+
+  /**
+   * Join two props at a point in the world, like a ball-and-socket (host / solo). With
+   * `swing` (radians) the second may only lean that far from how it sits on the first now.
+   */
+  joint(a, b, at, swing = 0) {
+    if (!a || !b || !a.body || !b.body) return;
+    const local = (p, v) => { const l = v.clone().sub(p.mesh.position).applyQuaternion(p.mesh.quaternion.clone().invert()); return new CANNON.Vec3(l.x, l.y, l.z); };
+    const add = c => { c.collideConnected = false; this.world.addConstraint(c); this.joints.push({ c, a: a.id, b: b.id }); };
+    if (!swing) { add(new CANNON.PointToPointConstraint(a.body, local(a, at), b.body, local(b, at))); return; }
+    // the line from the joint to the second prop's middle, as each of them sees it now
+    const axis = b.mesh.position.clone().sub(at).normalize();
+    const ax = p => { const l = axis.clone().applyQuaternion(p.mesh.quaternion.clone().invert()); return new CANNON.Vec3(l.x, l.y, l.z); };
+    add(new CANNON.ConeTwistConstraint(a.body, b.body, { pivotA: local(a, at), pivotB: local(b, at), axisA: ax(a), axisB: ax(b), angle: swing, twistAngle: swing }));
   }
 
   clear() {
@@ -307,17 +349,20 @@ export class PropWorld {
     const p = this.props.get(id);
     if (!p || p.held) return false;
     const inv = new THREE.Quaternion().copy(holder.quat).invert();
-    p.held = {
-      key: holder.key,
-      offset: p.mesh.position.clone().sub(holder.pos).applyQuaternion(inv),
-      rot: inv.multiply(p.mesh.quaternion),
-    };
+    p.held = p.type.weapon ? { key: holder.key, ...weaponHold(p.type.weapon) }      // a weapon jumps into the fist the right way round
+      : { key: holder.key, offset: p.mesh.position.clone().sub(holder.pos).applyQuaternion(inv), rot: inv.multiply(p.mesh.quaternion) };
     if (p.body) {
       p.body.type = CANNON.Body.KINEMATIC;
       p.body.mass = 0; p.body.updateMassProperties();
       p.body.velocity.setZero(); p.body.angularVelocity.setZero();
       p.body.allowSleep = false;
       p.body.wakeUp();
+      if (p.type.weapon) {
+        // straight into the fist, rather than flying there and batting things aside on the way
+        this.heldPose(p, holder.pos, holder.quat, _v, _q);
+        p.body.position.set(_v.x, _v.y, _v.z);
+        p.body.quaternion.set(_q.x, _q.y, _q.z, _q.w);
+      }
     }
     return true;
   }
@@ -349,13 +394,20 @@ export class PropWorld {
     }
   }
 
-  /** Move a held prop to follow its hand (host / solo). */
+  /**
+   * Move a held prop to follow its hand (host / solo). It is given the speed that takes it
+   * there in this step, and the physics moves it: so what it bumps into is pushed properly,
+   * and it settles on the hand instead of overshooting back and forth.
+   */
   moveHeld(p, pos, quat, dt) {
     const b = p.body;
     if (!b) return;
-    b.velocity.set((pos.x - b.position.x) / dt, (pos.y - b.position.y) / dt, (pos.z - b.position.z) / dt);
-    b.position.set(pos.x, pos.y, pos.z);
+    const dx = pos.x - b.position.x, dy = pos.y - b.position.y, dz = pos.z - b.position.z, inv = 1 / Math.max(dt, 1e-3);
+    if (dx * dx + dy * dy + dz * dz > 2.25) { b.position.set(pos.x, pos.y, pos.z); b.velocity.setZero(); }   // its holder teleported
+    else b.velocity.set(dx * inv, dy * inv, dz * inv);
     b.quaternion.set(quat.x, quat.y, quat.z, quat.w);
+    // the rest of a dead body must be awake to be dragged
+    if (p.rag) for (const o of this.props.values()) if (o.rag === p.rag && o.body) o.body.wakeUp();
   }
 
   // ---- players' hands knock light props around (host / solo)
@@ -364,7 +416,7 @@ export class PropWorld {
     let h = this.hands.get(key);
     if (h && Math.abs(h.r - r) > 1e-3) { this.world.removeBody(h); this.hands.delete(key); h = null; } // player changed size
     if (!h) {
-      h = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC, collisionFilterGroup: G_HAND, collisionFilterMask: G_LIGHT, allowSleep: false });
+      h = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC, collisionFilterGroup: G_HAND, collisionFilterMask: G_LIGHT | ALL_RAG, allowSleep: false });
       h.addShape(new CANNON.Sphere(r));
       h.r = r;
       h.position.set(pos.x, pos.y, pos.z);
@@ -372,10 +424,10 @@ export class PropWorld {
       this.hands.set(key, h);
     }
     h.seen = true;
+    // the speed that takes it to where the hand is now; the physics moves it there
     const inv = 1 / Math.max(dt, 1e-3);
     h.velocity.set((pos.x - h.position.x) * inv, (pos.y - h.position.y) * inv, (pos.z - h.position.z) * inv);
-    if (h.velocity.length() > 40) h.velocity.setZero(); // teleported (respawn): don't smack things
-    h.position.set(pos.x, pos.y, pos.z);
+    if (h.velocity.length() > 40) { h.velocity.setZero(); h.position.set(pos.x, pos.y, pos.z); }   // teleported (respawn): don't smack things
   }
   /** Remove hand bodies that were not set since the last call. */
   pruneHands() {
@@ -419,6 +471,8 @@ export class PropWorld {
       p.mesh.position.set(b.position.x, b.position.y, b.position.z);
       p.mesh.quaternion.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
       this._animate(p, dt);
+      p.age += dt;
+      if (p.shy > 0 && (p.shy -= dt) <= 0) b.collisionFilterMask |= G_HAND;
       if (p.type.fuse) {
         p.fuse -= dt;
         if (p.fuse <= 0) { const at = p.mesh.position.clone(); this.remove(p.id); this.explode(at); continue; }
@@ -482,13 +536,13 @@ export class PropWorld {
   }
 
   // ---- networking
-  /** Compact state: props as [id, typeIndex, x, y, z, qx, qy, qz, qw, heldKey|0, owner|0, fuse, colour, size], seeds as [id, typeIndex, x, y, z]. */
+  /** Compact state: props as [id, typeIndex, x, y, z, qx, qy, qz, qw, heldKey|0, owner|0, fuse, colour, size, wounds], seeds as [id, typeIndex, x, y, z]. */
   snapshot() {
     const r = v => Math.round(v * 1000) / 1000;
     const props = [], seeds = [];
     for (const p of this.props.values()) {
       const a = p.mesh.position, q = p.mesh.quaternion;
-      props.push([p.id, PROP_TYPES.indexOf(p.type), r(a.x), r(a.y), r(a.z), r(q.x), r(q.y), r(q.z), r(q.w), p.held ? p.held.key : 0, p.owner || 0, r(p.fuse), p.color || 0, p.size]);
+      props.push([p.id, PROP_TYPES.indexOf(p.type), r(a.x), r(a.y), r(a.z), r(q.x), r(q.y), r(q.z), r(q.w), p.held ? p.held.key : 0, p.owner || 0, r(p.fuse), p.color || 0, p.size, p.wounds]);
     }
     for (const s of this.seeds.values()) seeds.push([s.id, PROP_TYPES.indexOf(s.type), r(s.pos.x), r(s.pos.y), r(s.pos.z)]);
     return { props, seeds };
@@ -497,11 +551,11 @@ export class PropWorld {
   /** Joined players: make the props match the host's snapshot. */
   applySnapshot(snap) {
     const seen = new Set();
-    for (const [id, ti, x, y, z, qx, qy, qz, qw, heldKey, owner, fuse, color, size] of snap.props) {
+    for (const [id, ti, x, y, z, qx, qy, qz, qw, heldKey, owner, fuse, color, size, wounds] of snap.props) {
       seen.add(id);
       let p = this.props.get(id);
       const pos = new THREE.Vector3(x, y, z), quat = new THREE.Quaternion(qx, qy, qz, qw);
-      if (!p) p = this.spawn(PROP_TYPES[ti].id, pos, quat, { id, owner: owner || null, color: color || 0, scale: size || 1 });
+      if (!p) p = this.spawn(PROP_TYPES[ti].id, pos, quat, { id, owner: owner || null, color: color || 0, scale: size || 1, wounds: wounds || 0 });
       p.target.pos.copy(pos); p.target.quat.copy(quat);
       p.heldKey = heldKey || null;
       p.fuse = fuse || 0;
@@ -524,6 +578,7 @@ export class PropWorld {
       if (p.mesh.position.distanceTo(p.target.pos) > 3) p.mesh.position.copy(p.target.pos);
       else p.mesh.position.lerp(p.target.pos, a);
       p.mesh.quaternion.slerp(p.target.quat, a);
+      p.age += dt;
       this._animate(p, dt);
       this._updateCol(p);
     }
@@ -540,3 +595,5 @@ function snapYaw(q) {
   const yaw = Math.round(Math.atan2(f.x, f.z) / (Math.PI / 2)) * (Math.PI / 2);
   return q.setFromAxisAngle(_n.set(0, 1, 0), yaw);
 }
+
+export { weaponHold };

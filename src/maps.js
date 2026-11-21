@@ -1,10 +1,12 @@
-// The two maps, built out of voxels. Each build(v) fills a VoxelWorld; the floor and
+// The maps, built out of voxels. Each build(v) fills a VoxelWorld; the floor and
 // the border walls are added separately and cannot be broken.
 //
 // Sizes are in metres. Blocks are 0.25 m, so numbers here are mostly multiples of 0.25.
 //
 // Hide and seek is built for players of two sizes: hiders are about 0.25 m tall and
 // fit through any gap of 0.5 m; the giant is about 2 m tall and 0.9 m wide.
+
+import { VOXEL, MAT } from './voxels.js';
 
 function rng(seed) {
   return () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
@@ -445,7 +447,70 @@ function buildHideSeek(v) {
   }
 }
 
+// ------------------------------------------------------------------ arena: the colosseum
+//
+// A round sand floor inside a wall too high to hop over, with stone seats stepping up
+// all round it. Under the seats at the north and south ends are the two fighters' rooms,
+// each with a rack of weapons and a passage to a gate in the arena wall.
+const SEAT_R = 14, SEAT_DEPTH = 1.5, SEAT_RISE = 0.75, SEAT_ROWS = 9, WALL_TOP = 3.5;
+export const COLOSSEUM = {
+  radius: 13,                                  // the sand
+  floor: 0.25,                                 // how high the sand and the room floors are
+  // where each fighter appears (at the back of their room), and the way they face (toward their gate)
+  rooms: [{ spawn: [0, 0.25, -21.3], yaw: Math.PI }, { spawn: [0, 0.25, 21.3], yaw: 0 }],
+  // the gates: boxes players cannot pass while they are shut [cx, by, cz, w, h, d]
+  gates: [[0, 0.25, -13.5, 2.5, 2.75, 0.5], [0, 0.25, 13.5, 2.5, 2.75, 0.5]],
+  // where the weapons hang in each room, three on each side wall: [x, bottom y, z, yaw]
+  racks: [0, 1].map(side => [[-1, 17.7], [-1, 19.1], [-1, 20.5], [1, 17.7], [1, 19.1], [1, 20.5]].map(([wx, wz]) => [wx * 3.6, 0.95, (side ? 1 : -1) * wz, Math.PI / 2])),
+  /** The room a point is in or just outside (0 north, 1 south), or -1. */
+  roomOf(x, z) { return Math.abs(x) < 4.5 && Math.abs(z) > 12.5 && Math.abs(z) < 23 ? (z < 0 ? 0 : 1) : -1; },
+  /** A place in the seats for spectator number k: { pos, yaw } facing the middle. They fill up east and west. */
+  seat(k) {
+    const row = 2, r = SEAT_R + SEAT_DEPTH * (row + 0.5), a = (k % 2 ? Math.PI : 0) + ((k >> 1) % 6 - 2.5) * 0.14;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    return { pos: [x, WALL_TOP + SEAT_RISE * row, z], yaw: Math.atan2(x, z) };
+  },
+  // the bracket boards stand over the gates
+  boards: [{ pos: [0, 5.9, -14.4], yaw: 0 }, { pos: [0, 5.9, 14.4], yaw: Math.PI }],
+};
+
+function buildArena(v) {
+  const C = COLOSSEUM, top = SEAT_R + SEAT_DEPTH * SEAT_ROWS, outer = top + 1.5;      // 27.5, 29
+  const jy = y => Math.round(y / VOXEL);
+  for (let k = 0; k < v.nz; k++) for (let i = 0; i < v.nx; i++) {
+    const x = v.ox + (i + 0.5) * VOXEL, z = v.oz + (k + 0.5) * VOXEL, r = Math.hypot(x, z);
+    if (r >= outer) continue;
+    const put = (y0, y1, m) => v.fillVox(i, jy(y0), k, i + 1, jy(y1), k + 1, m);
+    if (r < C.radius) put(0, C.floor, MAT.sand);
+    else if (r < SEAT_R) { put(0, WALL_TOP - 0.25, MAT.stone); put(WALL_TOP - 0.25, WALL_TOP, MAT.plank); }      // the arena wall, capped with a rail
+    else if (r < top) put(0, WALL_TOP + SEAT_RISE * Math.floor((r - SEAT_R) / SEAT_DEPTH), MAT.marble);          // rows of seats
+    else {
+      // the outer wall: arches all the way round, with a parapet on top
+      const a = (Math.atan2(z, x) + Math.PI) / (Math.PI * 2) * 40, f = a - Math.floor(a);
+      put(0, 13, MAT.stone);
+      if (f > 0.22 && f < 0.78) { put(10, 11.5 + 1.5 * Math.sin((f - 0.22) / 0.56 * Math.PI) * 0.5, 0); }
+      if (Math.floor(a * 2) % 2) put(13, 13.5, MAT.stone);
+    }
+  }
+  // the two rooms, each with a passage to its gate
+  for (const s of [-1, 1]) {
+    const z = (a, b) => (s < 0 ? [-b, -a] : [a, b]);            // a range of |z|, as real z
+    const fill = (x0, y0, za, zb, x1, y1, m) => { const [z0, z1] = z(za, zb); v.fill(x0, y0, z0, x1, y1, z1, m); };
+    fill(-4, 0.25, 16.5, 22.5, 4, 3.5, 'air');                  // the room
+    fill(-1.25, 0.25, 12.75, 16.5, 1.25, 3.0, 'air');           // the passage, out through the arena wall
+    fill(-4, 0, 16.5, 22.5, 4, 0.25, 'stone'); fill(-1.25, 0, 12.75, 16.5, 1.25, 0.25, 'stone');   // their floors
+    // down each side wall: a board the weapons hang on, with a shelf under it
+    fill(-4, 0.75, 17, 21.25, -3.75, 3.0, 'plank'); fill(3.75, 0.75, 17, 21.25, 4, 3.0, 'plank');
+    fill(-4, 0.25, 17, 21.25, -3.25, 0.75, 'crate'); fill(3.25, 0.25, 17, 21.25, 4, 0.75, 'crate');
+    for (const px of [-1.5, 1.25]) fill(px, 0.25, 16.5, 16.75, px + 0.25, 3.0, 'wood');             // posts by the door
+    // the gate's surround, on the arena side, so you can tell the ends apart from across the sand
+    fill(-1.75, 0.25, 12.75, 13, -1.25, 3.25, 'brick'); fill(1.25, 0.25, 12.75, 13, 1.75, 3.25, 'brick');
+    fill(-1.75, 3.0, 12.75, 13, 1.75, 3.25, 'brick');
+  }
+}
+
 export const MAPS = {
   sandbox: { label: 'Sandbox', spawn: [0, 0, 6], giantSpawn: [0, 0, 6], build: buildSandbox },
   hideseek: { label: 'Hide and seek', spawn: [0, 0, 5], giantSpawn: [0, 0, -5.5], build: buildHideSeek },
+  arena: { label: 'Arena', spawn: [0, 0.25, 5], giantSpawn: [0, 0.25, 5], build: buildArena },
 };

@@ -36,6 +36,32 @@ test('an arm takes a couple of hard hits, then comes off where it was hit', () =
   assert.equal(new Body().sever(1, 2)[0].was, 0, 'a whole arm torn off was whole');
 });
 
+test('a head takes a couple of hard blows and then comes off', () => {
+  const b = new Body();
+  assert.deepEqual(types(b.hit('head', 40)), ['hit']);
+  assert.ok(!b.dead && !b.headOff && b.hp.head === BODY.hp.head - 40);
+  assert.deepEqual(types(b.hit('head', 40)), ['hit', 'behead', 'die']);
+  assert.ok(b.dead && b.headOff);
+  run(b, BODY.respawn + 0.1);
+  assert.ok(!b.dead && !b.headOff && b.hp.head === BODY.hp.head, 'and is back on when you come back');
+  // enough small knocks kill by blood loss first, with the head still on
+  const c = new Body();
+  let ev = [];
+  for (let i = 0; i < 12 && !c.dead; i++) { ev = c.hit('head', 9); c.hp.head = BODY.hp.head; }
+  assert.ok(c.dead && !c.headOff && !types(ev).includes('behead'));
+});
+
+test('a blade cuts where a fist only bruises', () => {
+  const fist = new Body(), blade = new Body();
+  fist.hit('foreL', 20); blade.hit('foreL', 20, { sharp: true });
+  assert.deepEqual([fist.cut[0], blade.cut[0]], [0, 1], 'an arm');
+  fist.hit('head', 50); blade.hit('head', 50, { sharp: true });
+  assert.deepEqual([fist.headOff, blade.headOff], [false, true], 'a neck');
+  const a = new Body(), c = new Body();
+  a.hit('torso', 30); c.hit('torso', 30, { sharp: true });
+  assert.ok(c.blood < a.blood, 'and it goes deeper into the body');
+});
+
 test('with one arm gone you bleed, it clots, and you live on with a lower blood limit', () => {
   const b = new Body();
   b.sever(1, 2);

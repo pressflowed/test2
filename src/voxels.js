@@ -28,6 +28,8 @@ export const MATERIALS = [
   { name: 'hay', tex: 'hay', tile: 1.5, tint: 0xffffff, hard: 1.6, kind: 'leaf', color: 0xd9b44a },
   { name: 'plaster', tex: 'plaster', tile: 2, tint: 0xffffff, hard: 0.9, kind: 'stone', color: 0xe6dcc4 },
   { name: 'dirt', tex: 'dirt', tile: 2, tint: 0xffffff, hard: 1.3, kind: 'grass', color: 0x7a5a3a },
+  { name: 'sand', tex: 'sand', tile: 2.5, tint: 0xffffff, hard: 1.5, kind: 'grass', color: 0xd6b877 },
+  { name: 'marble', tex: 'marble', tile: 2, tint: 0xffffff, hard: 0.7, kind: 'stone', color: 0xd5cdbd },
 ];
 export const MAT = { air: 0 };
 MATERIALS.forEach((m, i) => { if (m) MAT[m.name] = i; });

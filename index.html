@@ -34,7 +34,7 @@ button { font: inherit; font-weight: 800; font-size: 17px; padding: 11px 16px; b
 button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
 .play { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 18px; }
 #vr { background: var(--moss); color: var(--bark); }
-.mode { flex: 1 1 160px; border: 3px solid transparent; }
+.mode { flex: 1 1 130px; border: 3px solid transparent; }
 .mode[aria-pressed="true"] { border-color: var(--moss); color: var(--moss); }
 .note { margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.4; }
 .note a { color: var(--ink); }
@@ -67,7 +67,7 @@ details ul { margin: 8px 0 0; padding-left: 20px; line-height: 1.5; }
 <div id="menu">
   <div class="card">
     <h1>Canopy Tag</h1>
-    <p class="sub">No legs: push off the world with your hands. Punch things to smash them. Build and fight in the sandbox, or play hide and seek against a giant.</p>
+    <p class="sub">No legs: push off the world with your hands. Punch things to smash them. Build and fight in the sandbox, play hide and seek against a giant, or win the arena tournament.</p>
 
     <h2>You</h2>
     <div class="row">
@@ -118,6 +118,7 @@ details ul { margin: 8px 0 0; padding-left: 20px; line-height: 1.5; }
     <div class="row">
       <button class="mode" data-mode="sandbox" aria-pressed="true" type="button">Sandbox</button>
       <button class="mode" data-mode="hideseek" aria-pressed="false" type="button">Hide and seek</button>
+      <button class="mode" data-mode="arena" aria-pressed="false" type="button">Arena</button>
     </div>
     <p id="mode-note" class="note"></p>
 
@@ -133,14 +134,17 @@ details ul { margin: 8px 0 0; padding-left: 20px; line-height: 1.5; }
         <li><b>Move:</b> push the ground down and back with your hands. Fast strokes, then let go, to leap. Push down on walls to climb.</li>
         <li><b>Smash:</b> punch something hard and straight on to break a dent in it. Bigger players and harder punches break more. The floor and the outer wall never break.</li>
         <li><b>Fighting (sandbox):</b> punch someone with a fast hand to hurt them. You have 100 blood; at 0 you die and come back a few seconds later. Arms can be punched off, or torn off: squeeze <b>grip</b> on an arm with a slow hand and pull. With one arm gone you bleed for a while and live on one-handed. With both gone you bleed out fast. TNT hurts too.</li>
-        <li><b>Bots:</b> the arm menu's <b>Game</b> tab has <b>Add bot</b> and <b>Clear bots</b>: dummies to try all this on. <b>Fighting</b> on the same tab switches whether players can hurt each other.</li>
+        <li><b>Heads and bodies:</b> a head comes off after a couple of hard punches, or one good blow from an axe. When you die your body drops as a floppy ragdoll and you drift up to watch; you are back a few seconds later.</li>
+        <li><b>Weapons:</b> sword, axe, spear, club, war hammer, dagger. Squeeze <b>grip</b> near one to pick it up; it stays in your hand. To drop it, squeeze grip twice quickly. Swing it into someone: faster hurts more, and blades cut arms and heads off.</li>
+        <li><b>Arena:</b> a knockout tournament in a colosseum. Two fighters at a time get 20 seconds in their own rooms to take a weapon off the wall, then the gates open and they fight until one is dead. Winners go through until one champion is left. Everyone else watches from the seats. Alone, a bot fights you; add more on the Game tab.</li>
+        <li><b>Bots:</b> the arm menu's <b>Game</b> tab has <b>Add bot</b> and <b>Clear bots</b>: dummies to try all this on (in the arena they fight back). <b>Fighting</b> on the same tab switches whether players can hurt each other in the sandbox.</li>
         <li><b>Hide and seek:</b> one player is a giant, everyone else is tiny and fast. Hiders get 30 seconds to hide while the giant waits in the dark. Then the giant hunts: only the giant can smash, and touching a hider catches them. The giant wins by catching everyone; the hiders win if anyone lasts 3 minutes.</li>
         <li><b>Voice chat:</b> turn on your microphone here before entering VR. You hear friends louder when they are close, and from the side they are on. Mute and unmute on the arm menu's Game tab.</li>
         <li><b>Giants shake the ground:</b> you hear and feel a big player's steps from far away, and a hider's heart pounds as the giant gets close. A giant landing hard cracks the ground and knocks blocks loose.</li>
         <li><b>Arm menu:</b> it floats above your left hand. Poke its tabs and buttons with your right fingertip. To open or close it, poke the small <b>Menu</b> tab under it, or press <b>X</b>. The <b>Game</b> tab switches mode.</li>
         <li><b>Sandbox, spawning:</b> on the Items tab, reach into a preview with your right hand, squeeze <b>grip</b> to pull it out, and throw it. Right trigger quick-spawns, <b>A</b> picks the next item, <b>B</b> undoes, left trigger deletes, grip grabs props.</li>
         <li><b>Also:</b> right stick snap-turns, <b>Y</b> takes you back to the start (sandbox).</li>
-        <li><b>Desktop:</b> hold left / right click and drag down to push; Space for both hands. <b>J</b> punches who or what you look at. <b>U</b> adds a bot, I clears them, <b>Y</b> takes an arm off the bot you look at, 0 switches fighting on/off. O switches mode. F throws the selected item, wheel or 1–8 pick one, V quick-spawns, G (hold) grabs, X deletes, Z undoes. M shows the menu, T switches tab, [ ] size, - = power, L gravity, N sky, H smashing on/off, Backspace repairs the map, Q / E turn, R resets, Esc pauses.</li>
+        <li><b>Desktop:</b> hold left / right click and drag down to push; Space for both hands. <b>J</b> punches who or what you look at. <b>U</b> adds a bot, I clears them, <b>Y</b> takes an arm off the bot you look at, 0 switches fighting on/off. G picks up a weapon (G again drops it). O goes to the next mode, K draws a new arena bracket. F throws the selected item, wheel or 1–8 pick one, V quick-spawns, G (hold) grabs, X deletes, Z undoes. M shows the menu, T switches tab, [ ] size, - = power, L gravity, N sky, H smashing on/off, Backspace repairs the map, Q / E turn, R resets, Esc pauses.</li>
       </ul>
     </details>
     <p class="note">Body model: "Proportional Low Poly Man" by Robin Butler (<a href="https://sketchfab.com/StarTrekGuy">sketchfab.com/StarTrekGuy</a>), <a href="http://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>, changed (legs removed, cut into parts).</p>

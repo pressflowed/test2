@@ -190,6 +190,31 @@ const PAINT = {
     speckle(g, s, r, 120, ['#68492f', '#866545', '#5c4029'], 8, 30, 0.4);
     speckle(g, s, r, 700, ['#4a3320', '#9a7a58', '#8d8478'], 0.8, 2.6, 0.6);
   },
+  sand(g, s) {
+    const r = rng(107);
+    g.fillStyle = '#d6b877'; g.fillRect(0, 0, s, s);
+    speckle(g, s, r, 110, ['#c9a965', '#e2c98c', '#cdb06f'], 10, 34, 0.35);
+    speckle(g, s, r, 1400, ['#b8975a', '#eedaa6', '#a98a52'], 0.5, 1.4, 0.55);
+  },
+  marble(g, s) { // pale stone blocks with faint veins
+    const r = rng(109);
+    g.fillStyle = '#d5cdbd'; g.fillRect(0, 0, s, s);
+    speckle(g, s, r, 70, ['#c8bfad', '#e1dacb', '#cfc6b3'], 12, 40, 0.35);
+    g.strokeStyle = 'rgba(120,110,95,.35)'; g.lineWidth = 1;
+    for (let i = 0; i < 9; i++) {
+      let x = r() * s, y = r() * s;
+      g.beginPath(); g.moveTo(x, y);
+      for (let k = 0; k < 6; k++) { x += (r() - 0.5) * 50; y += (r() - 0.2) * 34; g.lineTo(x, y); }
+      g.stroke();
+    }
+    // block joints
+    g.strokeStyle = 'rgba(90,82,70,.5)'; g.lineWidth = 2;
+    for (let row = 0; row < 2; row++) {
+      const y = row * s / 2;
+      g.beginPath(); g.moveTo(0, y + 1); g.lineTo(s, y + 1); g.stroke();
+      for (let c = 0; c < 2; c++) { const x = (c + (row ? 0.5 : 0)) * s / 2; g.beginPath(); g.moveTo(x + 1, y); g.lineTo(x + 1, y + s / 2); g.stroke(); }
+    }
+  },
 
   // ---- props (not tiled across the world, drawn once per face or wrapped round)
   ball(g, s) {
@@ -277,7 +302,7 @@ const PAINT = {
   },
 };
 // props that reuse a level texture
-const ALIAS = { bigcrate: 'crate', platform: 'metal', wall: 'stone', pillar: 'stone', beam: 'wood', 'grass-dark': 'grass' };
+const ALIAS = { bigcrate: 'crate', platform: 'metal', wall: 'stone', pillar: 'stone', beam: 'wood', table: 'plank', 'grass-dark': 'grass' };
 
 /** A texture by name, or null if there is none (or no canvas, as in tests). */
 export function texture(name) {

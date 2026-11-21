@@ -160,13 +160,99 @@ const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (
     check(await until(() => game.session.body('b3').dead, null, 120000), 'with both arms gone it bleeds out and dies');
     r = await page.evaluate(t => ({ took: game.time - t, gibs: game.T.gibs(), shown: game.session.players.get('b3').avatar.root.visible }), t0);
     check(r.took < 12, `and quickly (${(r.took + 1.8).toFixed(1)} s)`);
-    check(r.gibs.includes('gib_head') && r.gibs.includes('gib_torso') && !r.shown, `the body falls apart: ${r.gibs}`);
+    check(r.gibs.includes('gib_head') && r.gibs.includes('gib_torso') && !r.shown, `its body is left lying there: ${r.gibs}`);
     await gameWait(0.6);
     await shot('body-6-dead.png', [b3[0] - 0.4, 2.6, b3[2] + 1.6], [b3[0], 0.2, b3[2]]);
     check(await until(() => !game.session.body('b3').dead, null, 120000), 'the bot comes back');
     await gameWait(0.3);
     r = await page.evaluate(() => ({ cut: game.session.body('b3').cut.slice(), blood: game.session.body('b3').blood, shown: game.session.players.get('b3').avatar.root.visible, arm: game.session.players.get('b3').avatar.arms[0].upper.g.visible }));
     check(r.cut[0] === 0 && r.cut[1] === 0 && r.blood === 100 && r.shown && r.arm, `whole again: ${JSON.stringify(r)}`);
+
+    // ---- a body killed in one piece drops as a ragdoll: its parts stay joined, and you can drag it about by one of them
+    const frames = n => page.evaluate(k => new Promise(done => { let i = 0; const f = () => (++i >= k ? done() : requestAnimationFrame(f)); f(); }), n);
+    await page.evaluate(() => { game.T.face('b1', 'head', 1.2); });
+    await gameWait(0.3);
+    await page.evaluate(() => { game.session.hit('b1', 'torso', 250, 1); });
+    await gameWait(0.2);
+    const rag = await page.evaluate(() => {
+      const S = game.session, n = Math.max(...[...S.props.props.values()].map(p => p.rag)), mine = [...S.props.props.values()].filter(p => p.rag === n);
+      return { n, dead: S.body('b1').dead, shown: S.players.get('b1').avatar.root.visible, parts: mine.map(p => p.type.id).sort().join(), wounds: mine.find(p => p.type.id === 'gib_torso').wounds, joints: S.props.joints.filter(j => mine.some(p => p.id === j.a)).length };
+    });
+    check(rag.dead && !rag.shown && rag.parts === 'gib_fore,gib_head,gib_torso,gib_upper' && rag.joints === 3 && rag.wounds === 2, `a killed bot is left as a jointed body, missing the arm it had lost: ${JSON.stringify(rag)}`);
+    await gameWait(2.5);
+    const lying = n => page.evaluate(k => {
+      const at = id => [...game.session.props.props.values()].find(p => p.rag === k && p.type.id === id).mesh.position;
+      return { high: Math.max(at('gib_torso').y, at('gib_head').y, at('gib_fore').y), neck: at('gib_head').distanceTo(at('gib_torso')), elbow: at('gib_fore').distanceTo(at('gib_upper')), shoulder: at('gib_upper').distanceTo(at('gib_torso')), torso: at('gib_torso').toArray() };
+    }, n);
+    r = await lying(rag.n);
+    check(r.high < 0.7 && r.neck < 0.55 && r.elbow < 0.45 && r.shoulder < 0.6, `it flops to the ground in one piece: ${JSON.stringify(r)}`);
+    await shot('body-10-ragdoll.png', [r.torso[0] + 1.1, 1.2, r.torso[2] + 1.5], [r.torso[0], 0.15, r.torso[2]]);
+    await page.evaluate(() => { game.desktop.pitch = -0.9; });
+    await gameWait(0.3);
+    await page.evaluate(k => { game.T.handTo([...game.session.props.props.values()].find(p => p.rag === k && p.type.id === 'gib_fore').mesh.position); game.desktop.keys.KeyG = true; }, rag.n);
+    check(await until(() => game.session.held[1] != null), 'grip takes hold of the dead arm');
+    for (let i = 0; i < 12; i++) { await page.evaluate(() => { game.loco.origin.x += 0.2; }); await frames(2); }      // walk off with it
+    await gameWait(0.8);
+    const dragged = await lying(rag.n);
+    const toHand = await page.evaluate(t => game.loco.hands[1].pos.distanceTo(new game.THREE.Vector3(...t)), dragged.torso);
+    // (the limp arm takes up some slack first, so the body moves less far than the hand did)
+    check(dragged.torso[0] - r.torso[0] > 0.5 && toHand < 1.1 && dragged.elbow < 0.6 && dragged.shoulder < 0.75 && dragged.neck < 0.6, `the rest of the body is dragged along behind: moved ${(dragged.torso[0] - r.torso[0]).toFixed(2)} m, now ${toHand.toFixed(2)} m from my hand`);
+    await page.evaluate(() => { game.desktop.keys.KeyG = false; });
+    await until(() => game.session.held[1] == null);
+
+    // ---- heads come off
+    await page.evaluate(() => { game.T.face('b2', 'head', 1.2); });
+    await gameWait(0.3);
+    await page.evaluate(() => { game.fx.length = 0; game.blood.clear(); game.session.hit('b2', 'head', 40, 1); });
+    await gameWait(0.1);
+    check(await page.evaluate(() => !game.session.body('b2').dead && game.session.body('b2').hp.head === 30), 'one hard punch in the head does not take it off');
+    await page.evaluate(() => { game.session.hit('b2', 'head', 40, 1); });
+    await gameWait(0.2);
+    r = await page.evaluate(() => {
+      const S = game.session, n = Math.max(...[...S.props.props.values()].map(p => p.rag)), all = [...S.props.props.values()];
+      const head = all.filter(p => p.type.id === 'gib_head' && !p.rag).pop(), torso = all.find(p => p.rag === n && p.type.id === 'gib_torso');
+      return { dead: S.body('b2').dead, off: S.body('b2').headOff, fx: game.fx.map(e => e.k).join(), loose: !!head && head.wounds, torso: torso.wounds, headOn: all.some(p => p.rag === n && p.type.id === 'gib_head'), drops: game.blood.drops.length, at: torso.mesh.position.toArray() };
+    });
+    check(r.dead && r.off && /behead/.test(r.fx) && r.loose === 1 && (r.torso & 1) && !r.headOn, `the second one does: the head flies off and the body drops without it: ${JSON.stringify(r)}`);
+    check(r.drops > 25, `and the neck spurts (${r.drops} drops)`);
+    await gameWait(1.2);
+    await shot('body-11-headless.png', [r.at[0] + 1.3, 1.3, r.at[2] + 1.6], [r.at[0], 0.3, r.at[2]]);
+
+    // ---- weapons: a blade cuts where a fist only bruises, and stays in your hand
+    await page.evaluate(() => { const h = game.loco.head; game.session.request({ t: 'spawn', type: 'sword', pos: [h.x + 1.5, 0.6, h.z + 1.5] }); game.desktop.pitch = -0.9; });
+    await gameWait(1.8);
+    await page.evaluate(() => { game.T.handTo([...game.session.props.props.values()].find(p => p.type.id === 'sword').mesh.position); game.desktop.keys.KeyG = true; game.desktop.pressed.add('KeyG'); });
+    check(await until(() => game.heldWeapon(1) && game.stuck[1]), 'grip picks the sword up');
+    await page.evaluate(() => { game.desktop.keys.KeyG = false; });
+    await frames(6);
+    r = await page.evaluate(() => { const p = game.heldWeapon(1); return { still: !!p, key: p && p.held.key, armed: game.desktop.hands[1].armed, d: p && p.mesh.position.distanceTo(game.loco.hands[1].pos) }; });
+    check(r.still && r.key === 'h:1' && r.armed && Math.abs(r.d - 0.38) < 0.06, `and it stays in the hand when grip is let go, held by the hilt: ${JSON.stringify(r)}`);
+    await page.evaluate(() => { game.desktop.pitch = -0.3; game.T.face('b3', 'torsoTop', 1.3); });
+    await gameWait(0.4);
+    await shot('body-12-sword.png');
+    r = await page.evaluate(() => {
+      const S = game.session, sword = game.heldWeapon(1).id, b = S.body('b3');
+      S.hit('b3', 'foreL', 20, 1);                 // a fist (no weapon named)
+      const fist = b.cut[0];
+      S.hit('b3', 'upperL', 26, 0, sword);         // claiming the sword for the hand that does not hold it
+      const cheat = b.cut[0];
+      S.hit('b3', 'foreR', 20, 1, sword);          // the sword, in the hand that holds it
+      return { fist, cheat, blade: b.cut[1] };
+    });
+    check(r.fist === 0 && r.cheat === 0 && r.blade === 1, `the same blow that a fist only bruises with takes the forearm off with a sword: ${JSON.stringify(r)}`);
+    // (those blows knocked it back: wait for it to land, then step up to it again)
+    await page.evaluate(() => game.T.still('b3'));
+    await until(() => game.session.bots.get('b3').loco.grounded);
+    await gameWait(0.4);
+    await page.evaluate(() => { game.T.face('b3', 'torsoTop', 1.3); });
+    await gameWait(0.3);
+    await page.evaluate(() => { game.T.look(); });
+    await gameWait(0.3);
+    r = await page.evaluate(() => { const b = game.session.body('b3'), before = b.blood; game.punchAhead(); return { lost: before - b.blood, dead: b.dead }; });
+    check(r.lost > 15 || r.dead, `swinging it (J) at the bot in front of me hurts a lot (${r.lost.toFixed(0)} blood)`);
+    await page.evaluate(() => { game.desktop.keys.KeyG = true; game.desktop.pressed.add('KeyG'); });
+    check(await until(() => game.session.held[1] == null && !game.stuck[1]), 'squeezing grip again lets go of it');
+    await page.evaluate(() => { game.desktop.keys.KeyG = false; game.session.body('b3').reset(); });
 
     // ---- TNT hurts bodies
     await page.evaluate(() => { game.T.still('b3'); const h = game.session.rigs.get('b3').head; game.loco.teleport(new game.THREE.Vector3(h.x, 0, h.z + 14)); });   // I stand well back
@@ -225,6 +311,12 @@ const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (
     await gameWait(0.3);
     r = await page.evaluate(() => ({ title: game.hud.title, body: game.avatar.root.visible, gibs: game.T.gibs(), pain: game.hud.pain }));
     check(/You died/.test(r.title) && !r.body && r.gibs.includes('gib_head') && r.pain > 0.5, `I die: ${JSON.stringify(r)}`);
+    const diedAt = await page.evaluate(() => game.loco.head.toArray());
+    await gameWait(1.2);
+    r = await page.evaluate(() => game.loco.head.toArray());
+    check(r[1] - diedAt[1] > 0.3 && Math.hypot(r[0] - diedAt[0], r[2] - diedAt[2]) > 0.5, `and drift up and back out of my body to watch it fall (${(r[1] - diedAt[1]).toFixed(2)} m up)`);
+    await page.evaluate(() => { game.desktop.pitch = -0.6; });
+    await gameWait(0.2);
     await shot('body-8-dead.png');
     const z1 = await page.evaluate(() => game.loco.head.toArray());
     check(await until(() => !game.session.body().dead, null, 120000), 'and come back a few seconds later');

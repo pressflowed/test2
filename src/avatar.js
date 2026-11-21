@@ -285,6 +285,12 @@ export function fingertip(handPos, handQuat, scale, out) {
 }
 
 /**
+ * How a fist holding a weapon sits, relative to the camera, for mouse players and bots:
+ * thumb up, knuckles forward (so the blade stands up, leaning a little away from you).
+ */
+export const ARMED_GRIP = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+
+/**
  * A made-up grip rotation for mouse players, relative to the camera: fists forward and a
  * little down, palms facing the ground. `side` is +1 for the left hand, -1 for the right.
  */

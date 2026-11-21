@@ -2,7 +2,9 @@
 // Mouse looks around. Hold left/right click to take control of that hand and move the
 // mouse to swing it; hold Space for both hands. Q/E or arrow keys turn.
 import * as THREE from 'three';
-import { restGrip } from './avatar.js';
+import { restGrip, ARMED_GRIP } from './avatar.js';
+
+const X_AXIS = new THREE.Vector3(1, 0, 0), SWING = 0.25;
 
 const ARM = 0.95, DEPTH = 0.85, HAND_SENS = 0.0027, LOOK_SENS = 0.0022;
 
@@ -16,6 +18,7 @@ export class DesktopInput {
     this.hands = [-1, 1].map(side => ({
       grip: restGrip(-side),
       rest: new THREE.Vector2(0.27 * side, -0.25), off: new THREE.Vector2(0.27 * side, -0.25), held: 0, spent: false,
+      armed: false, swingT: 0,      // armed: holding a weapon (the game sets this); swingT: seconds left of a swing
       local: new THREE.Vector3(), quat: new THREE.Quaternion(),
     }));
     this.keys = {};
@@ -24,6 +27,7 @@ export class DesktopInput {
     this.dx = 0; this.dy = 0;
     this.onRespawn = () => {};
     this._e = new THREE.Euler(0, 0, 0, 'YXZ');
+    this._q = new THREE.Quaternion();
 
     addEventListener('mousemove', e => {
       if (!this.enabled) return;
@@ -70,6 +74,9 @@ export class DesktopInput {
     try { const p = this.canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* optional */ }
   }
 
+  /** Show a hand striking (the hit itself is worked out by the game). */
+  swing(i) { this.hands[i].swingT = SWING; }
+
   grab(i, bit) {
     const h = this.hands[i];
     if (!h.held) h.spent = false;
@@ -104,8 +111,17 @@ export class DesktopInput {
       if (!h.held || h.spent) h.off.lerp(h.rest, relax);
       const r = h.off.length();
       const z = Math.sqrt(Math.max(ARM * ARM - r * r, 0)) * DEPTH;
-      h.local.set(h.off.x, h.off.y, -z).applyQuaternion(this.headQuat).add(this.headLocal);
-      h.quat.copy(this.headQuat).multiply(h.grip);
+      h.swingT = Math.max(0, h.swingT - dt);
+      const blow = h.swingT > 0 ? 1 - h.swingT / SWING : -1;        // 0 wound up .. 1 landed
+      if (h.armed) {
+        // a weapon is held up in front, thumb on top; a swing brings it over and down
+        h.local.set(h.off.x * 0.9, h.off.y + (blow >= 0 ? 0.3 - 0.35 * blow : 0.05), -z * (blow >= 0 ? 0.55 + 0.45 * blow : 0.75));
+        h.quat.copy(this.headQuat).multiply(this._q.setFromAxisAngle(X_AXIS, blow >= 0 ? 0.5 - 1.7 * blow : 0)).multiply(ARMED_GRIP);
+      } else {
+        h.local.set(h.off.x, h.off.y, -z * (blow >= 0 ? 1 + 0.25 * Math.sin(blow * Math.PI) : 1));
+        h.quat.copy(this.headQuat).multiply(h.grip);
+      }
+      h.local.applyQuaternion(this.headQuat).add(this.headLocal);
     }
   }
 }

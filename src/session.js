@@ -1,5 +1,6 @@
 // Ties the game together for solo and multiplayer play: the map, breaking it, props,
-// other players, hide and seek rounds, and shared settings.
+// other players and bots, bodies and fighting, hide and seek rounds, the arena
+// tournament, and shared settings.
 //
 // The host (or a solo player) owns the truth: it runs the prop physics and the round
 // rules, applies everyone's requests and sends snapshots 20 times a second. Joined
@@ -9,13 +10,16 @@
 // just "a ball of this size at this spot", and the voxel world gives the same result
 // for the same punches on every machine, in any order.
 import * as THREE from 'three';
-import { PropWorld, SPAWNABLE, TYPE, MAX_GIBS } from './props.js';
+import { PropWorld, SPAWNABLE, TYPE, MAX_GIBS, weaponHold } from './props.js';
+import { WEAPONS } from './weapons.js';
+import { Tournament } from './arena.js';
+import { gibFrame, LOOSE, RIGHT } from './gibs.js';
 import { Avatar } from './avatar.js';
-import { MAPS } from './maps.js';
+import { MAPS, COLOSSEUM } from './maps.js';
 import { Rounds } from './rounds.js';
 import { Body, BODY } from './body.js';
 import { RIG, solveRig, makeRig, grabArm, stumpOf } from './bodyrig.js';
-import { Bot, MAX_BOTS } from './bots.js';
+import { Bot, MAX_BOTS, GLADIATORS } from './bots.js';
 
 const SEND_EVERY = 0.05;     // 20 Hz
 const STATE_LEN = 22;        // head pos+quat (7), two hands pos+quat (14), size (1)
@@ -28,6 +32,7 @@ const BLAST_DENT = 1.6;      // crater from TNT
 const BODY_PARTS = ['head', 'torso', 'upperL', 'foreL', 'upperR', 'foreR'];
 const r3 = v => Math.round(v * 1000) / 1000;
 const DOWN = new THREE.Vector3(0, -1, 0);
+const Y_FLIP = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);   // the body model faces +Z, a camera looks down -Z
 
 export class Session {
   /**
@@ -47,6 +52,9 @@ export class Session {
     this.carveLog = [];         // every dent since the map was fresh, for players who join later
     this.rounds = new Rounds();
     this.round = this.rounds.public();
+    this.tournament = new Tournament();
+    this.arena = this.tournament.public();   // the arena tournament, as everyone sees it
+    this.onArena = () => {};    // (arena, previousArena) the tournament moved on
     this.players = new Map();   // id -> { name, color, state: Float32 array, avatar, cur }
     this.template = null;
     avatarTemplate.then(t => { this.template = t; for (const p of this.players.values()) this._ensureAvatar(p); });
@@ -103,8 +111,16 @@ export class Session {
   isBot(id) { return !!this.players.get(id)?.bot; }
   nameOf(id) { return id === this.myId ? this.me.name : (this.players.get(id)?.name || 'Someone'); }
 
-  /** What I am right now: 'free' (no round), 'giant', 'hider', or 'ghost' (caught). */
+  /**
+   * What I am right now: 'free' (no round), 'giant', 'hider' or 'ghost' (caught) in hide
+   * and seek; 'fighter' (in the match being fought) or 'spectator' in the arena.
+   */
   role(id = this.myId) {
+    if (this.settings.mode === 'arena') {
+      const a = this.arena;
+      if (a.phase === 'waiting') return 'free';
+      return (a.phase === 'prep' || a.phase === 'fight') && (a.a === id || a.b === id) ? 'fighter' : 'spectator';
+    }
     const r = this.round;
     if (this.settings.mode !== 'hideseek' || r.phase === 'waiting') return 'free';
     if (r.giant === id) return 'giant';
@@ -125,6 +141,7 @@ export class Session {
     this.bodies.clear();
     this._newProps(false);
     this._setRound(new Rounds().public());
+    this._setArena(new Tournament().public());
     try {
       await this.net.join(code);
     } catch (e) {
@@ -143,9 +160,11 @@ export class Session {
     this.peers.clear();
     this.bodies.clear();
     this.rounds.stop();
+    this.tournament.stop();
     this.loadMap(this.settings.mode);
     this._applySettings({ ...this.settings, gravity: 'normal', sky: 'day' });
     this._setRound(this.rounds.public());
+    this._setArena(this.tournament.public());
     this.onChange();
   }
 
@@ -168,9 +187,9 @@ export class Session {
     this._building = false;
     this.carveLog = [];
     this._newProps(this.isAuthority);
-    // a new map is a fresh start: everyone whole again; bots only live in the sandbox
+    // a new map is a fresh start: everyone whole again, and the bots go home
     for (const b of this.bodies.values()) b.reset();
-    if (mode !== 'sandbox') this._clearBots();
+    this._clearBots();
     this.onChange();
   }
 
@@ -186,12 +205,13 @@ export class Session {
   setMode(mode) { this.request({ t: 'mode', mode }); }
   /** Repair everything that was broken. */
   resetMap() { this.request({ t: 'resetmap' }); }
-  /** End this hide and seek round and start another. */
+  /** End this hide and seek round and start another; in the arena, draw a new bracket. */
   skipRound() { this.request({ t: 'round', cmd: 'skip' }); }
 
   _hostSetMode(mode) {
     if (!MAPS[mode] || mode === this.mode) return;
     this.rounds.stop();
+    this.tournament.stop();
     this.loadMap(mode);
     this._applySettings({ ...this.settings, gravity: 'normal' });
     this.net.broadcast({ t: 'map', mode, carves: [] });
@@ -214,6 +234,7 @@ export class Session {
   /** May this player break blocks right now? */
   canBreak(id = this.myId) {
     if (this.settings.mode === 'hideseek') return this.round.phase === 'waiting' || (this.round.phase === 'hunt' && this.round.giant === id);
+    if (this.settings.mode === 'arena') return false;       // the colosseum stays standing
     return this.settings.smash;
   }
 
@@ -253,11 +274,21 @@ export class Session {
 
   // ---- bots (host only): to everyone else they are just more players
   _addBot(near) {
-    if (this.bots.size >= MAX_BOTS || this.settings.mode !== 'sandbox') return;
+    const mode = this.settings.mode;
+    if (this.bots.size >= MAX_BOTS || mode === 'hideseek') return;
     const id = 'b' + (++this._botN);
-    const pos = near ? near.clone() : new THREE.Vector3(0, 0, 3);
-    pos.y = Math.max(pos.y - 0.6, 0) + 0.3;
-    const bot = new Bot(id, this._botN, this.world, pos);
+    let pos, name;
+    if (mode === 'arena') {
+      // a gladiator: it takes a seat until it is its turn
+      const seat = COLOSSEUM.seat(this.bots.size * 2 + 1);
+      pos = new THREE.Vector3().fromArray(seat.pos);
+      name = GLADIATORS[(this._botN - 1) % GLADIATORS.length];
+    } else {
+      pos = near ? near.clone() : new THREE.Vector3(0, 0, 3);
+      pos.y = Math.max(pos.y - 0.6, 0) + 0.3;
+    }
+    const bot = new Bot(id, this._botN, this.world, pos, name);
+    if (mode === 'arena') bot.place(pos, COLOSSEUM.seat(this.bots.size * 2 + 1).yaw);
     this.bots.set(id, bot);
     const p = { id, name: bot.name, color: bot.color, state: packState(bot.pose), bot: true };
     this.players.set(id, p);
@@ -347,6 +378,7 @@ export class Session {
         const s = msg.settings;
         if (s && (s.gravity !== this.settings.gravity || s.sky !== this.settings.sky || s.smash !== this.settings.smash || s.pvp !== this.settings.pvp)) this._applySettings(s);
         if (msg.round) this._setRound(msg.round);
+        if (msg.arena) this._setArena(msg.arena);
         for (const b of msg.bodies || []) this.body(b[0]).apply(b.slice(1));
       } else if (msg.t === 'bfx') {
         this.onBodyFx(msg);
@@ -366,8 +398,10 @@ export class Session {
 
   _handleRequest(from, msg) {
     const props = this.props;
-    // hide and seek is played with bare hands: no spawning, deleting or undoing
-    if (this.settings.mode === 'hideseek' && ['spawn', 'throw', 'del', 'undo'].includes(msg.t)) return;
+    // outside the sandbox there is no spawning, deleting or undoing
+    if (this.settings.mode !== 'sandbox' && ['spawn', 'throw', 'del', 'undo'].includes(msg.t)) return;
+    // and in the arena only the two fighters may pick things up
+    if (this.settings.mode === 'arena' && msg.t === 'grab' && this.role(from) !== 'fighter') return;
     switch (msg.t) {
       case 'spawn': {
         if (!TYPE[msg.type] || TYPE[msg.type].gib || !Array.isArray(msg.pos)) return;
@@ -427,14 +461,14 @@ export class Session {
         break;
       case 'mode': this._hostSetMode(msg.mode); break;
       case 'resetmap': if (this.settings.mode === 'sandbox') this._hostResetMap(); break;
-      case 'round': if (msg.cmd === 'skip') this.rounds.skip(); break;
+      case 'round': if (msg.cmd === 'skip') { if (this.settings.mode === 'arena') this.tournament.restart(); else this.rounds.skip(); } break;
     }
   }
 
   _pressButton(id) {
     const now = performance.now();
     if (now - (this._buttonT[id] || 0) < 500) return;
-    if (this.settings.mode === 'hideseek' && id !== 'sky') return;   // the world is left alone during hide and seek
+    if (this.settings.mode !== 'sandbox' && id !== 'sky') return;   // the world is left alone outside the sandbox
     this._buttonT[id] = now;
     const cycle = (order, cur) => order[(order.indexOf(cur) + 1) % order.length];
     if (id === 'lowgrav') this._applySettings({ ...this.settings, gravity: this.settings.gravity === 'low' ? 'normal' : 'low' });
@@ -471,6 +505,81 @@ export class Session {
     this.onButton('lowgrav', this.settings.gravity === 'low');
     this.onSettings(this.settings);
     this.onChange();
+  }
+
+  // ---- the arena
+  _setArena(st) {
+    const key = JSON.stringify(st);
+    if (key === this._arenaKey) return;
+    const prev = this.arena;
+    this._arenaKey = key;
+    this.arena = st;
+    this.onArena(st, prev);
+  }
+
+  // Host: the tournament moved on.
+  _arenaEvent(e) {
+    const props = this.props;
+    if (e.type === 'start' || e.type === 'waiting') {
+      props.clear();
+      for (const b of this.bodies.values()) b.reset();
+      this._seatBots();
+    } else if (e.type === 'match') {
+      // a clean floor, two whole fighters, and a full rack of weapons in each room
+      props.clear();
+      this.held = [null, null];
+      for (const id of [e.a, e.b]) this.body(id).reset();
+      const kinds = Object.keys(WEAPONS);
+      COLOSSEUM.racks.forEach(rack => rack.forEach(([x, y, z, yaw], k) => {
+        const type = kinds[k % kinds.length];
+        const p = props.spawn(type, new THREE.Vector3(x, y + WEAPONS[type].size[1] / 2, z), new THREE.Quaternion().setFromAxisAngle(DOWN, -yaw), { owner: 'rack' });
+        if (p && p.body) p.body.sleep();        // they hang there until someone takes one
+      }));
+      this._seatBots(e);
+      // a bot fighter goes to its room and is handed something at random
+      [e.a, e.b].forEach((id, side) => {
+        const bot = this.bots.get(id);
+        if (!bot) return;
+        const room = COLOSSEUM.rooms[side];
+        bot.place(new THREE.Vector3().fromArray(room.spawn), room.yaw);
+        const type = kinds[Math.floor(Math.random() * kinds.length)], hand = bot.pose.hands[1];
+        const p = props.spawn(type, hand.pos.clone(), null, { owner: 'rack' });
+        if (p) props.grab(p.id, { key: `${id}:1`, pos: hand.pos, quat: hand.quat });
+      });
+    } else if (e.type === 'result' || e.type === 'champion') {
+      for (const bot of this.bots.values()) bot.cheer();
+    }
+  }
+
+  // bots that are not fighting sit in the seats (all of them, or just `only`)
+  _seatBots(match = null, only = null) {
+    let k = 0;
+    for (const [id, bot] of this.bots) {
+      k++;
+      if ((match && (match.a === id || match.b === id)) || (only && only !== id)) continue;
+      const seat = COLOSSEUM.seat(k * 2 - 1);
+      bot.place(new THREE.Vector3().fromArray(seat.pos), seat.yaw);
+    }
+  }
+
+  // how far a bot can hit from: an arm, plus whatever it is holding
+  _reach(held) {
+    const w = held && held.type.weapon;
+    return 0.85 + (w ? w.hits[w.hits.length - 1][1] - w.hilt : 0);
+  }
+
+  // A bot's blow has landed: if its opponent is still within reach, it hurts.
+  _botStrike(id, held) {
+    const T = this.tournament.state, foe = T.a === id ? T.b : T.a;
+    const ap = this.poses.get(id), tp = this.poses.get(foe), tb = this.bodies.get(foe), body = this.body(id);
+    if (!this.mayHurt(id, foe) || !ap || !tp || !(body.canUse(0) || body.canUse(1))) return;
+    if (ap.head.pos.distanceTo(tp.head.pos) > this._reach(held) + 0.3) return;        // they got away
+    const w = held && held.type.weapon;
+    const roll = Math.random(), part = roll < 0.45 ? 'torso' : roll < 0.6 ? 'head' : ['upperL', 'foreL', 'upperR', 'foreR'][Math.floor(Math.random() * 4)];
+    const arm = part.endsWith('L') ? 0 : 1, gone = part !== 'torso' && part !== 'head' && tb.cut[arm] >= (part.startsWith('fore') ? 1 : 2);
+    const dmg = (w ? w.dmg * 0.65 : 13) * (0.8 + Math.random() * 0.4);
+    const dir = tp.head.pos.clone().sub(ap.head.pos).setY(0).normalize();
+    this._bodyEvents(foe, tb.hit(gone ? 'torso' : part, dmg, { sharp: !!(w && w.sharp) }), { by: id, dir, push: Math.min(dmg / 10, 4.5) * (w ? w.knock : 1), sharp: !!(w && w.sharp) });
   }
 
   _setRound(round) {
@@ -535,14 +644,26 @@ export class Session {
   pressButton(id) { this.request({ t: 'button', id }); }
 
   // ---- bodies: hitting, grabbing and ripping
-  /** May I hurt this player or bot? Bots always (in the sandbox); people only while fighting is on. */
-  canHurt(id) {
-    if (this.settings.mode !== 'sandbox' || id === this.myId) return false;
+  /**
+   * May `by` hurt `id` right now? In the sandbox: bots always, people only while fighting
+   * is on. In the arena: only the two in the ring, and only once the gates are open.
+   */
+  mayHurt(by, id) {
     const b = this.bodies.get(id);
-    return !!b && !b.dead && (this.isBot(id) || this.settings.pvp);
+    if (by === id || !b || b.dead) return false;
+    if (this.settings.mode === 'sandbox') return this.isBot(id) || this.settings.pvp;
+    if (this.settings.mode === 'arena') { const a = this.arena; return a.phase === 'fight' && ((a.a === by && a.b === id) || (a.b === by && a.a === id)); }
+    return false;
   }
-  /** My fist landed on someone. power is roughly the damage at equal size. */
-  hit(id, part, power, hand) { this.request({ t: 'hit', id, part, power: r3(power), hand }); }
+  canHurt(id) { return this.mayHurt(this.myId, id); }
+  /** My fist (or the weapon `prop` in it) landed on someone. power is roughly the damage at equal size. */
+  hit(id, part, power, hand, prop = null) { this.request({ t: 'hit', id, part, power: r3(power), hand, prop }); }
+  /** The weapon in one of a player's hands, or null: { prop, weapon }. */
+  weaponIn(id, hand) {
+    const key = `${id}:${hand}`;
+    for (const p of this.props.props.values()) if (p.type.weapon && ((p.held && p.held.key === key) || p.heldKey === key)) return p;
+    return null;
+  }
   /** Take hold of someone's arm with one of my hands; pull far enough and it comes off. */
   holdArm(id, arm, hand) { this.request({ t: 'hold', id, arm, hand }); }
   letGoArm(hand) { this.request({ t: 'unhold', hand }); }
@@ -560,19 +681,20 @@ export class Session {
   _hostHit(from, msg) {
     const hand = msg.hand ? 1 : 0;
     const tb = this.bodies.get(msg.id), tp = this.poses.get(msg.id), ap = this.poses.get(from);
-    if (this.settings.mode !== 'sandbox' || !tb || !tp || !ap || tb.dead || msg.id === from || !BODY_PARTS.includes(msg.part)) return;
-    if (!this.body(from).canUse(hand) || (!this.isBot(msg.id) && !this.settings.pvp)) return;
+    if (!this.mayHurt(from, msg.id) || !tp || !ap || !BODY_PARTS.includes(msg.part) || !this.body(from).canUse(hand)) return;
     if (ap.hands[hand].pos.distanceTo(tp.head.pos) > 2.5 * (ap.scale + tp.scale)) return;      // has to be within arm's reach
+    // a weapon counts only if it really is in that hand
+    const held = msg.prop != null ? this.props.props.get(msg.prop) : null;
+    const w = held && held.type.weapon && held.held && held.held.key === `${from}:${hand}` ? held.type.weapon : null;
     const dmg = Math.min(Math.max(Number(msg.power) || 0, 0), 250) / Math.pow(tp.scale, 1.5);  // bigger bodies shrug more off
     const dir = tp.head.pos.clone().sub(ap.head.pos).setY(0).normalize();
-    this._bodyEvents(msg.id, tb.hit(msg.part, dmg), { by: from, dir, push: Math.min(dmg / 10, 4.5) });
+    this._bodyEvents(msg.id, tb.hit(msg.part, dmg, { sharp: !!(w && w.sharp) }), { by: from, dir, push: Math.min(dmg / 10, 4.5) * (w ? w.knock : 1), sharp: !!(w && w.sharp) });
   }
 
   _hostHold(from, msg) {
     const hand = msg.hand ? 1 : 0, arm = msg.arm ? 1 : 0;
     const tb = this.bodies.get(msg.id), tp = this.poses.get(msg.id), ap = this.poses.get(from), rig = this.rigs.get(msg.id);
-    if (this.settings.mode !== 'sandbox' || !tb || !tp || !ap || !rig || tb.dead || msg.id === from) return;
-    if (!this.body(from).canUse(hand) || (!this.isBot(msg.id) && !this.settings.pvp)) return;
+    if (!this.mayHurt(from, msg.id) || !tp || !ap || !rig || !this.body(from).canUse(hand)) return;
     if (tb.cut[arm] >= 2 || tb.held[arm] || ap.scale < 0.5 * tp.scale) return;                 // nothing to hold, or far too small to hold it
     if (grabArm(rig, tb.cut, ap.hands[hand].pos, 0.25 * ap.scale) !== arm) return;
     tb.held[arm] = `${from}:${hand}`; tb.holdT[arm] = 0;
@@ -584,53 +706,118 @@ export class Session {
     this._bodyEvents(id, this.body(id).sever(arm, 2), { by: who, hand, ripped: true });
   }
 
-  // Turn what Body reports into things in the world: blood, loose pieces, messages to everyone.
+  // Turn what Body reports into things in the world: blood, loose pieces, corpses, messages to everyone.
   _bodyEvents(id, events, ctx = {}) {
     if (!events.length) return;
     const rig = this.rigs.get(id), pose = this.poses.get(id), color = this.colorOf(id);
     if (!rig || !pose) return;
-    const arr = v => v.toArray().map(r3);
-    // a loose piece of this body: in its skin colour, and its size
-    const loose = (type, pos, dir, vel) => {
-      const lying = [...this.props.props.values()].filter(p => p.type.gib && !p.held);
-      if (lying.length >= MAX_GIBS) this.props.remove(lying[0].id);
-      return this.props.spawn(type, pos, new THREE.Quaternion().setFromUnitVectors(DOWN, dir), { owner: 'gib', color, vel, scale: pose.scale });
-    };
+    const s = pose.scale, arr = v => v.toArray().map(r3);
     const fling = () => new THREE.Vector3((Math.random() - 0.5) * 3, 1.5 + Math.random() * 2, (Math.random() - 0.5) * 3);
+    const along = dir => new THREE.Quaternion().setFromUnitVectors(DOWN, dir);     // arm pieces lie along their own -Y
+    // a loose piece of this body: in its skin colour, and its size
+    const loose = (type, pos, quat, vel, wounds = null, rag = 0) => {
+      const lying = [...this.props.props.values()].filter(p => p.type.gib && !p.held);
+      if (lying.length >= MAX_GIBS) { if (lying[0].rag && lying[0].rag !== rag) this.props.removeGroup(lying[0].rag); else this.props.remove(lying[0].id); }
+      return this.props.spawn(type, pos, quat, { owner: 'gib', color, vel, scale: s, wounds, rag });
+    };
+    // where the pieces of an arm are: each one's middle, and the way it points
+    const arm = a => {
+      const S = rig.shoulder[a], d1 = rig.elbow[a].clone().sub(S).normalize(), E = S.clone().addScaledVector(d1, RIG.upper * s);
+      const d2 = rig.wrist[a].clone().sub(rig.elbow[a]).normalize(), dAll = rig.wrist[a].clone().sub(S).normalize(), side = a ? RIGHT : 0;
+      return {
+        S, E, d1, d2, dAll, side,
+        upper: S.clone().addScaledVector(d1, RIG.upper * s / 2),
+        fore: E.clone().addScaledVector(d2, (RIG.fore + RIG.hand) * s / 2),
+        whole: S.clone().addScaledVector(dAll, (RIG.upper + RIG.fore + RIG.hand) * s / 2),
+      };
+    };
     for (const e of events) {
       if (e.type === 'hit') {
         const at = e.part === 'head' ? rig.head : e.part === 'torso' ? rig.torsoTop : (e.part.startsWith('fore') ? rig.wrist : rig.elbow)[e.part.endsWith('L') ? 0 : 1];
-        this._fx({ k: 'hit', id, part: e.part, dmg: Math.round(e.dmg), p: arr(at), d: ctx.dir ? arr(ctx.dir) : [0, 0, 0], push: r3(ctx.push || 0), by: ctx.by || 0 });
+        this._fx({ k: 'hit', id, part: e.part, dmg: Math.round(e.dmg), p: arr(at), d: ctx.dir ? arr(ctx.dir) : [0, 0, 0], push: r3(ctx.push || 0), by: ctx.by || 0, sharp: ctx.sharp ? 1 : 0 });
         const bot = this.bots.get(id);
         if (bot && ctx.dir) bot.knock(ctx.dir, ctx.push || 1);
+        if (this.settings.mode === 'arena') for (const [bid, b] of this.bots) if (bid !== id && bid !== ctx.by) b.cheer();     // the crowd likes that
       } else if (e.type === 'sever') {
-        const a = e.arm, S = rig.shoulder[a], E = rig.elbow[a], W = rig.wrist[a];
+        const A = arm(e.arm);
         // which piece came off: the whole arm, just the forearm, or the stump that was left
-        const [type, from, to] = e.level === 1 ? ['gib_fore', E, W] : e.was === 1 ? ['gib_upper', S, E] : ['gib_arm', S, W];
-        const dir = to.clone().sub(from).normalize();
+        const [type, pos, dir] = e.level === 1 ? ['gib_fore', A.fore, A.d2] : e.was === 1 ? ['gib_upper', A.upper, A.d1] : ['gib_arm', A.whole, A.dAll];
         // torn off by hand, it stays in that hand (if the hand is empty); otherwise it flies off
         const key = `${ctx.by}:${ctx.hand}`, hp = ctx.ripped ? this.poses.get(ctx.by)?.hands[ctx.hand] : null;
         const keep = !!hp && ![...this.props.props.values()].some(p => p.held && p.held.key === key);
-        const gib = loose(type, from.clone().lerp(to, 0.5), dir, keep ? null : fling());
+        const gib = loose(type, pos, along(dir), keep ? null : fling(), LOOSE[type] | A.side);
         if (keep && gib && this.props.grab(gib.id, { key, pos: hp.pos, quat: hp.quat })) {
           if (ctx.by === this.myId) this.held[ctx.hand] = gib.id; else this.net.sendTo(ctx.by, { t: 'given', hand: ctx.hand, id: gib.id });
         }
-        this._fx({ k: 'sever', id, arm: a, level: e.level, p: arr(e.level === 1 ? E : S), ripped: ctx.ripped ? 1 : 0, by: ctx.by || 0 });
+        this._fx({ k: 'sever', id, arm: e.arm, level: e.level, p: arr(e.level === 1 ? rig.elbow[e.arm] : A.S), ripped: ctx.ripped ? 1 : 0, by: ctx.by || 0 });
+      } else if (e.type === 'behead') {
+        // the head goes flying the way it was hit
+        const v = fling().multiplyScalar(0.6);
+        if (ctx.dir) v.addScaledVector(ctx.dir, 3 + Math.min(ctx.push || 0, 4));
+        v.y += 2.5;
+        loose('gib_head', this._headAt(pose), pose.head.quat.clone().multiply(Y_FLIP), v, 1);
+        this._fx({ k: 'behead', id, p: arr(rig.torsoTop), by: ctx.by || 0 });
       } else if (e.type === 'die') {
-        // the body falls apart into what was left of it
         const body = this.body(id);
-        loose('gib_head', rig.head.clone(), DOWN, fling());
-        loose('gib_torso', rig.torsoTop.clone().lerp(rig.torsoBottom, 0.5), DOWN, fling().multiplyScalar(0.5));
-        for (let a = 0; a < 2; a++) {
-          if (body.cut[a] === 0) loose('gib_arm', rig.shoulder[a].clone().lerp(rig.wrist[a], 0.5), rig.wrist[a].clone().sub(rig.shoulder[a]).normalize(), fling());
-          else if (body.cut[a] === 1) loose('gib_upper', rig.shoulder[a].clone().lerp(rig.elbow[a], 0.5), rig.elbow[a].clone().sub(rig.shoulder[a]).normalize(), fling());
-        }
-        this._fx({ k: 'die', id, p: arr(rig.head), by: ctx.by || 0 });
+        if (ctx.blast) {
+          // blown to bits: every piece goes its own way
+          const out = () => fling().addScaledVector(ctx.dir || DOWN, ctx.dir ? 4 : 0);
+          if (!body.headOff) loose('gib_head', this._headAt(pose), pose.head.quat.clone().multiply(Y_FLIP), out(), 1);
+          loose('gib_torso', this._torsoAt(pose, rig), rig.rootQuat.clone(), out().multiplyScalar(0.6), 7);
+          for (let a = 0; a < 2; a++) {
+            const A = arm(a);
+            if (body.cut[a] === 0) loose('gib_arm', A.whole, along(A.dAll), out(), 1 | A.side);
+            else if (body.cut[a] === 1) loose('gib_upper', A.upper, along(A.d1), out(), 3 | A.side);
+          }
+        } else this._corpse(id, pose, rig, body, ctx, loose, arm, along);
+        this._fx({ k: 'die', id, p: arr(rig.head), by: ctx.by || 0, blast: ctx.blast ? 1 : 0 });
       } else if (e.type === 'respawn') {
         const bot = this.bots.get(id);
-        if (bot) bot.respawn();
+        if (bot && this.settings.mode === 'arena') {
+          // back from the dead: to the seats, unless it is up again already
+          const T = this.tournament.state;
+          this._seatBots(T.phase === 'prep' || T.phase === 'fight' ? T : null, id);
+        } else if (bot) bot.respawn();
         this._fx({ k: 'respawn', id });
       }
+    }
+  }
+
+  // where the head and torso pieces sit for a body in this pose
+  _headAt(pose) {
+    const f = gibFrame('gib_head');
+    return f ? f.centre.clone().multiplyScalar(pose.scale).applyQuaternion(pose.head.quat.clone().multiply(Y_FLIP)).add(pose.head.pos) : pose.head.pos.clone();
+  }
+  _torsoAt(pose, rig) {
+    const f = gibFrame('gib_torso');
+    return f ? f.centre.clone().multiplyScalar(pose.scale).applyQuaternion(rig.rootQuat).add(pose.head.pos) : rig.torsoTop.clone().lerp(rig.torsoBottom, 0.5);
+  }
+
+  // A dead body: what is left of it, jointed together at the neck, shoulders and elbows,
+  // dropped where it stood and left to flop.
+  _corpse(id, pose, rig, body, ctx, loose, arm, along) {
+    const s = pose.scale, props = this.props, rag = this._ragN = (this._ragN || 0) + 1;
+    // it keeps going the way it was moving, and the way the last blow sent it
+    const base = new THREE.Vector3(0, 0.6, 0);
+    const bot = this.bots.get(id);
+    if (bot) base.add(bot.loco.vel);           // (a bot has already been knocked back by the blow)
+    else if (ctx.dir) base.addScaledVector(ctx.dir, 1 + (ctx.push || 0));
+    const flat = Math.hypot(base.x, base.z);
+    if (flat > 4) { base.x *= 4 / flat; base.z *= 4 / flat; }          // a hard shove, not a cannon
+    base.y = Math.min(Math.max(base.y, -3), 3);
+    const vel = () => base.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5));
+    const torso = loose('gib_torso', this._torsoAt(pose, rig), rig.rootQuat.clone(), vel(), (body.headOff ? 1 : 0) | (body.cut[0] === 2 ? 2 : 0) | (body.cut[1] === 2 ? 4 : 0), rag);
+    if (!torso) return;
+    if (!body.headOff) {
+      const head = loose('gib_head', this._headAt(pose), pose.head.quat.clone().multiply(Y_FLIP), vel(), 0, rag);
+      props.joint(torso, head, new THREE.Vector3(0, -0.13, -0.05).multiplyScalar(s).applyQuaternion(rig.rootQuat).add(pose.head.pos), 1.1);
+    }
+    for (let a = 0; a < 2; a++) {
+      if (body.cut[a] === 2) continue;
+      const A = arm(a);
+      const upper = loose('gib_upper', A.upper, along(A.d1), vel(), (body.cut[a] === 1 ? 2 : 0) | A.side, rag);
+      props.joint(torso, upper, A.S);
+      if (body.cut[a] === 0) props.joint(upper, loose('gib_fore', A.fore, along(A.d2), vel(), A.side, rag), A.E);
     }
   }
 
@@ -681,7 +868,7 @@ export class Session {
       if (d > 6) continue;
       const dir = pose.head.pos.clone().sub(at).setY(0.3).normalize(), ctx = { by: 0, dir, push: 3 * (1 - d / 6) };
       if (d < 3.5 && Math.random() < (d < 1.6 ? 1 : 0.5)) this._bodyEvents(id, body.sever(Math.random() < 0.5 ? 0 : 1, Math.random() < 0.5 ? 1 : 2), ctx);
-      this._bodyEvents(id, body.hit('torso', d < 1.6 ? 400 : 60 * (1 - d / 6)), ctx);
+      this._bodyEvents(id, body.hit('torso', d < 1.6 ? 400 : 60 * (1 - d / 6)), { ...ctx, blast: d < 3 });
     }
   }
 
@@ -714,13 +901,33 @@ export class Session {
   update(dt, local) {
     this._local = local;
     const props = this.props, poses = this.poses;
+    // what a dead hand or a missing arm was holding has been dropped
+    const mine = this.body();
+    for (let i = 0; i < 2; i++) if (this.held[i] != null && (mine.dead || mine.cut[i] !== 0)) this.held[i] = null;
     const tmpP = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
 
     // 1. bots think and move (host); to everything below they are ordinary players
-    if (this.isAuthority) for (const [id, bot] of this.bots) {
-      bot.update(dt, this.body(id), this._pullerOf(id));
-      const p = this.players.get(id);
-      if (p) p.state = packState(bot.pose);
+    if (this.isAuthority) {
+      const arena = this.settings.mode === 'arena', T = this.tournament.state;
+      for (const [id, bot] of this.bots) {
+        const held = this.weaponIn(id, 1) || this.weaponIn(id, 0);
+        bot.weaponHand = held ? Number(held.held.key.split(':')[1]) : -1;
+        let brain = null;
+        if (arena) {
+          brain = { kind: 'still' };
+          const foe = T.phase === 'fight' && (T.a === id || T.b === id) ? poses.get(T.a === id ? T.b : T.a) : null;
+          if (foe) {
+            // out of its room by the door first, then straight at them
+            const at = bot.loco.head, side = at.z < 0 ? -1 : 1, inRoom = COLOSSEUM.roomOf(at.x, at.z) >= 0;
+            const goal = !inRoom ? null : Math.abs(at.z) > 16.2 && Math.abs(at.x) > 0.5 ? new THREE.Vector3(0, 0, side * 17.3) : new THREE.Vector3(0, 0, side * 11);
+            brain = { kind: 'fight', target: foe.head.pos, goal, reach: this._reach(held) };
+          }
+        }
+        bot.update(dt, this.body(id), this._pullerOf(id), brain);
+        if (bot.strike) this._botStrike(id, held);
+        const p = this.players.get(id);
+        if (p) p.state = packState(bot.pose);
+      }
     }
 
     // 2. where everyone is: me, and every other player gliding toward their latest pose
@@ -784,6 +991,18 @@ export class Session {
         for (const e of this.rounds.update(dt, ids, rp)) if (e.type === 'start') this._hostResetMap();   // every round starts on a repaired map
       }
       this._setRound(this.rounds.public());
+      // the arena tournament: everyone here is in it, bots too
+      if (this.settings.mode === 'arena') {
+        if (this.playerCount + this.bots.size < 2) this._addBot();          // nobody has to wait alone
+        const ids = [], info = {};
+        for (const [id, pose] of poses) {
+          const b = this.body(id);
+          ids.push(id);
+          info[id] = { dead: b.dead, blood: b.blood, inside: Math.hypot(pose.head.pos.x, pose.head.pos.z) < COLOSSEUM.radius + 0.6 };
+        }
+        for (const e of this.tournament.update(dt, ids, info)) this._arenaEvent(e);
+      }
+      this._setArena(this.tournament.public());
       this._stepBodies(dt);
     } else {
       props.interpolate(dt);
@@ -793,7 +1012,8 @@ export class Session {
         if (!p) continue;
         if (!p.localHold) {
           const inv = local.hands[i].quat.clone().invert();
-          p.localHold = { offset: p.mesh.position.clone().sub(local.hands[i].pos).applyQuaternion(inv), rot: inv.multiply(p.mesh.quaternion) };
+          p.localHold = p.type.weapon ? weaponHold(p.type.weapon)
+            : { offset: p.mesh.position.clone().sub(local.hands[i].pos).applyQuaternion(inv), rot: inv.multiply(p.mesh.quaternion) };
         }
         p.mesh.position.copy(p.localHold.offset).applyQuaternion(local.hands[i].quat).add(local.hands[i].pos);
         p.mesh.quaternion.copy(local.hands[i].quat).multiply(p.localHold.rot);
@@ -857,7 +1077,7 @@ export class Session {
         for (const p of this.players.values()) if (p.state) players.push([p.id, ...p.state]);
         const bodies = [];
         for (const id of poses.keys()) bodies.push([id, ...this.body(id).pack()]);
-        this.net.broadcast({ t: 'snap', players, ...props.snapshot(), settings: this.settings, round: this.round, bodies });
+        this.net.broadcast({ t: 'snap', players, ...props.snapshot(), settings: this.settings, round: this.round, arena: this.arena, bodies });
       } else {
         this.net.send({ t: 'state', s: mine });
       }

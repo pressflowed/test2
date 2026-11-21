@@ -2,13 +2,16 @@
 // Pure rules with no graphics; the host runs them for every player and bot.
 //
 //   blood 100 -> 0 means dead. Wounds bleed for a while and then clot.
+//   The head can take so much, and then it comes off (which is the end of you).
 //   Each arm can be lost at the elbow (level 1) or the shoulder (level 2).
+//   Sharp weapons go through arms and necks much more easily than fists do.
 //   One arm gone: you bleed, it clots, you live on one-handed (with a lower blood limit).
 //   Both arms gone: the bleeding does not stop.
 
 export const BODY = {
   blood: 100,
-  hp: { upper: 45, fore: 35 },       // damage an arm segment takes before it comes off
+  hp: { upper: 45, fore: 35, head: 70 },   // damage a part takes before it comes off
+  sharp: { arm: 1.8, head: 1.5, torso: 1.5 },   // how much worse a blade is than a fist, per part
   armBloodCost: 15,                  // each lost arm lowers how much blood you can get back to
   severLoss: 10,                     // blood lost at once when an arm comes off
   bleed: { elbow: [1.6, 12], shoulder: [2.4, 12], both: 9 },   // [blood per second, seconds]
@@ -26,7 +29,8 @@ export class Body {
 
   reset() {
     this.blood = BODY.blood;
-    this.hp = { upperL: BODY.hp.upper, foreL: BODY.hp.fore, upperR: BODY.hp.upper, foreR: BODY.hp.fore };
+    this.hp = { upperL: BODY.hp.upper, foreL: BODY.hp.fore, upperR: BODY.hp.upper, foreR: BODY.hp.fore, head: BODY.hp.head };
+    this.headOff = false;
     this.cut = [0, 0];            // per arm: 0 whole, 1 gone below the elbow, 2 gone at the shoulder
     this.bleeds = [];             // { rate, left, src } where src is an arm index, 'both' or 'body'
     this.dead = false;
@@ -53,23 +57,34 @@ export class Body {
 
   /**
    * Take a hit on a part: 'head', 'torso', 'upperL', 'foreL', 'upperR' or 'foreR'.
-   * Returns what happened: [{ type: 'hit', part, dmg }, { type: 'sever', arm, level, was }, { type: 'die' }].
+   * `sharp` is for blades: they cut where a fist only bruises.
+   * Returns what happened: [{ type: 'hit', part, dmg }, { type: 'sever', arm, level, was }, { type: 'behead' }, { type: 'die' }].
    */
-  hit(part, dmg) {
+  hit(part, dmg, { sharp = false } = {}) {
     if (this.dead || !(dmg > 0)) return [];
     const ev = [{ type: 'hit', part, dmg }];
     this.calm = 0;
-    if (part === 'head') { this.blood -= dmg * 1.1; this.bleeds.push({ rate: dmg * 0.08, left: 4, src: 'body' }); }
-    else if (part === 'torso') { this.blood -= dmg * 0.6; this.bleeds.push({ rate: dmg * 0.04, left: 4, src: 'body' }); }
+    if (part === 'head') {
+      this.blood -= dmg * 1.1; this.bleeds.push({ rate: dmg * 0.08, left: 4, src: 'body' });
+      this.hp.head -= dmg * (sharp ? BODY.sharp.head : 1);
+      if (this.hp.head <= 0) { ev.push(...this.behead()); return ev; }
+    } else if (part === 'torso') { this.blood -= dmg * 0.6 * (sharp ? BODY.sharp.torso : 1); this.bleeds.push({ rate: dmg * 0.04, left: 4, src: 'body' }); }
     else if (part in this.hp) {
       const arm = part.endsWith('L') ? 0 : 1, level = part.startsWith('fore') ? 1 : 2;
       if (this.cut[arm] >= level) return [];              // that piece is already gone
-      this.hp[part] -= dmg;
+      this.hp[part] -= dmg * (sharp ? BODY.sharp.arm : 1);
       this.blood -= dmg * 0.2;
       if (this.hp[part] <= 0) ev.push(...this.sever(arm, level));
     } else return [];
     if (this.blood <= 0 && !this.dead) ev.push(...this._die());
     return ev;
+  }
+
+  /** The head comes off. Nobody survives that. */
+  behead() {
+    if (this.dead) return [];
+    this.headOff = true;
+    return [{ type: 'behead' }, ...this._die()];
   }
 
   /** Take an arm off at the elbow (1) or shoulder (2). */

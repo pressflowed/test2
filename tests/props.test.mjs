@@ -211,3 +211,70 @@ test('a thrown seed lands on voxel blocks', () => {
   const crate = [...props.props.values()][0];
   assert.ok(Math.abs(crate.mesh.position.y - 3.275) < 0.05 && crate.mesh.position.z < -3, `on top of the wall: ${crate.mesh.position.toArray()}`);
 });
+
+test('the pieces of a dead body stay joined, and come apart when one is removed', () => {
+  const { props } = setup();
+  const opts = { owner: 'gib', rag: 1 };
+  const torso = props.spawn('gib_torso', V(0, 1.2, 0), null, opts), head = props.spawn('gib_head', V(0, 1.65, 0), null, opts);
+  const upper = props.spawn('gib_upper', V(0.3, 1.3, 0), null, opts), fore = props.spawn('gib_fore', V(0.3, 0.95, 0), null, opts);
+  props.joint(torso, head, V(0, 1.5, 0), 1.1);
+  props.joint(torso, upper, V(0.25, 1.45, 0));
+  props.joint(upper, fore, V(0.3, 1.15, 0));
+  assert.equal(props.joints.length, 3);
+  steps(props, 300);
+  const d = (a, b) => a.mesh.position.distanceTo(b.mesh.position);
+  assert.ok(torso.mesh.position.y < 0.5 && torso.mesh.position.y > 0.05, `the body lies on the ground: ${torso.mesh.position.y}`);
+  assert.ok(d(torso, head) < 0.6 && d(torso, upper) < 0.6 && d(upper, fore) < 0.5, `still in one piece: ${[d(torso, head), d(torso, upper), d(upper, fore)].map(x => x.toFixed(2))}`);
+  for (const p of [torso, head, upper, fore]) assert.ok(Math.hypot(p.body.velocity.x, p.body.velocity.y, p.body.velocity.z) < 0.5, 'and it has come to rest');
+  // carried by the forearm, the rest comes too
+  const hand = { key: 'h:1', pos: fore.mesh.position.clone(), quat: new THREE.Quaternion() };
+  assert.ok(props.grab(fore.id, hand));
+  const at = new THREE.Vector3(), q = new THREE.Quaternion();
+  for (let i = 0; i < 200; i++) {
+    hand.pos.x += 0.012; hand.pos.y = Math.min(hand.pos.y + 0.01, 1.4);
+    props.heldPose(fore, hand.pos, hand.quat, at, q);
+    props.moveHeld(fore, at, q, DT);
+    props.step(DT);
+  }
+  assert.ok(torso.mesh.position.x > 1.6 && d(upper, fore) < 0.55 && d(torso, upper) < 0.7, `dragged along: torso x ${torso.mesh.position.x.toFixed(2)}`);
+  props.remove(upper.id);
+  assert.equal(props.joints.length, 1, 'removing a piece removes its joints');
+  props.removeGroup(1);
+  assert.equal(props.props.size, 0);
+  assert.equal(props.joints.length, 0);
+});
+
+test('a weapon lies down when spawned, jumps into the fist when grabbed, and settles there', () => {
+  const { props } = setup();
+  const spear = props.spawn('spear', V(0, 1.2, 0), null);
+  const sword = props.spawn('sword', V(2, 0.6, 0), null);
+  steps(props, 300);
+  assert.ok(spear.mesh.position.y < 0.2, `a spear does not balance on its end: y ${spear.mesh.position.y}`);
+  const hand = { key: 'h:1', pos: V(2, 1.3, 0.5), quat: new THREE.Quaternion() };
+  assert.ok(props.grab(sword.id, hand));
+  const at = new THREE.Vector3(), q = new THREE.Quaternion();
+  for (let i = 0; i < 10; i++) { props.heldPose(sword, hand.pos, hand.quat, at, q); props.moveHeld(sword, at, q, DT); props.step(DT); }
+  const d = sword.mesh.position.distanceTo(hand.pos), w = sword.type.weapon;
+  assert.ok(Math.abs(d - Math.abs(w.hilt)) < 0.01, `held by the hilt: ${d}`);
+  assert.ok(Math.hypot(sword.body.velocity.x, sword.body.velocity.y, sword.body.velocity.z) < 0.05, 'and still');
+  // the far end of the blade is above the fist (out of the thumb side) and a little forward
+  const tip = V(0, w.hits[w.hits.length - 1][1], 0).applyQuaternion(sword.mesh.quaternion).add(sword.mesh.position).sub(hand.pos);
+  assert.ok(tip.z < -0.6 && tip.y < -0.2, `the blade runs out of the top of the fist (grip -Z), leaning toward the knuckles (-Y): ${tip.toArray().map(x => x.toFixed(2))}`);
+  // a moving hand takes it along without it ringing about
+  for (let i = 0; i < 60; i++) { hand.pos.x += 0.02; props.heldPose(sword, hand.pos, hand.quat, at, q); props.moveHeld(sword, at, q, DT); props.step(DT); }
+  for (let i = 0; i < 5; i++) { props.heldPose(sword, hand.pos, hand.quat, at, q); props.moveHeld(sword, at, q, DT); props.step(DT); }
+  assert.ok(Math.abs(sword.mesh.position.distanceTo(hand.pos) - Math.abs(w.hilt)) < 0.01, 'it follows the hand');
+});
+
+test('a weapon hung on a rack stays there until it is taken', () => {
+  const { props } = setup();
+  const axe = props.spawn('axe', V(0, 1.5, 0), null, { owner: 'rack' });
+  axe.body.sleep();
+  steps(props, 200);
+  assert.ok(Math.abs(axe.mesh.position.y - 1.5) < 1e-6, 'hanging');
+  assert.ok(Math.abs(axe.mesh.quaternion.w) > 0.999, 'upright');
+  props.grab(axe.id, { key: 'h:0', pos: V(0, 1.2, 0.3), quat: new THREE.Quaternion() });
+  props.release(axe.id);
+  steps(props, 200);
+  assert.ok(axe.mesh.position.y < 0.3, 'dropped, it falls');
+});

@@ -1,56 +1,171 @@
-// Body pieces lying around after an arm comes off or someone dies. They are ordinary
-// physics props (see props.js), just drawn with the real body parts. Each piece is one
-// mesh (skin and raw flesh are painted on as vertex colours), so a pile of them stays cheap.
+// Body pieces: what is left lying around when an arm comes off, and the parts a dead
+// body is made of (see the ragdoll in session.js). They are ordinary physics props
+// (see props.js), just drawn with the real body parts. Each piece is one mesh (skin and
+// raw flesh are painted on as vertex colours), so a pile of them stays cheap.
+//
+// A piece's ends are either whole (rounded off with skin, where it is still joined to
+// the next piece of a ragdoll) or wounds (raw red, where it was cut or torn). `wounds`
+// is a set of bits saying which:
+//   head:      1 the neck
+//   torso:     1 the neck, 2 the left shoulder, 4 the right shoulder
+//   upper arm: 1 the shoulder end, 2 the elbow end
+//   forearm:   1 the elbow end          whole arm: 1 the shoulder end
+//   and 8 on any arm piece means it is a right arm (the left one, mirrored).
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { RIG } from './bodyrig.js';
 
 let template = null;
 const material = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
 const FLESH = new THREE.Color(0x8c1212);
 const DOWN = new THREE.Vector3(0, -1, 0);
+const ballGeo = new THREE.IcosahedronGeometry(1, 1);
+export const RIGHT = 8;
+/** What a piece looks like when it is simply lying about on its own. */
+export const LOOSE = { gib_head: 1, gib_torso: 7, gib_arm: 1, gib_fore: 1, gib_upper: 3 };
 
 /** Give this the loaded body model (assets/body-rig.glb) once it is ready. */
-export function setBodyTemplate(t) { template = t; }
+export function setBodyTemplate(t) { template = t; frames.clear(); }
 
-// which body parts make up each piece
-const PIECES = {
-  gib_head: ['Head', 'Head_cap'],
-  gib_torso: ['Torso', 'Torso_cap'],
-  gib_arm: ['UpperArm_L', 'UpperArm_L_cap', 'Forearm_L', 'Hand_L'],
-  gib_fore: ['Forearm_L', 'Forearm_L_cap', 'Hand_L'],
-  gib_upper: ['UpperArm_L', 'UpperArm_L_cap'],
-};
+const v3 = a => new THREE.Vector3().fromArray(a);
+const part = name => template.getObjectByName(name);
+
+// A part's triangles in body space ("rig space": eyes at the origin), position and normal only.
+function bodyGeo(name) {
+  const src = part(name);
+  if (!src || !src.geometry) return null;
+  const g = src.geometry.index ? src.geometry.toNonIndexed() : src.geometry.clone();
+  for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k);
+  if (!g.attributes.normal) g.computeVertexNormals();
+  g.translate(src.position.x, src.position.y, src.position.z);
+  return g;
+}
+// Only the triangles of `geo` whose middle passes `keep`.
+function pick(geo, keep) {
+  const p = geo.attributes.position, n = geo.attributes.normal, pos = [], nrm = [], c = new THREE.Vector3();
+  for (let i = 0; i < p.count; i += 3) {
+    c.set(0, 0, 0);
+    for (let k = 0; k < 3; k++) c.x += p.getX(i + k) / 3, c.y += p.getY(i + k) / 3, c.z += p.getZ(i + k) / 3;
+    if (!keep(c)) continue;
+    for (let k = 0; k < 3; k++) { pos.push(p.getX(i + k), p.getY(i + k), p.getZ(i + k)); nrm.push(n.getX(i + k), n.getY(i + k), n.getZ(i + k)); }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  return g;
+}
+function ball(r, at) {
+  const g = ballGeo.clone();
+  for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k);
+  if (Array.isArray(r)) g.scale(...r); else g.scale(r, r, r);
+  return g.translate(at.x, at.y, at.z);
+}
+function paint(g, color) {
+  const n = g.attributes.position.count, col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { col[i * 3] = color.r; col[i * 3 + 1] = color.g; col[i * 3 + 2] = color.b; }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return g;
+}
+
+// The left arm's joints in body space.
+function armJoints() {
+  const u = part('UpperArm_L').userData, f = part('Forearm_L').userData, h = part('Hand_L').userData;
+  const shoulder = v3(u.from), elbow = v3(u.to), wrist = v3(f.to), tip = v3(h.to);
+  return { shoulder, elbow, wrist, tip, top: shoulder.clone().add(elbow.clone().sub(shoulder).setLength(0.09)) };
+}
+
+const frames = new Map();
+/**
+ * Where a piece's own middle is on a whole body, in body space at normal size: { centre,
+ * turn }. A point p on the body is at turn * (p - centre) on the piece. Arm pieces are
+ * laid along their own Y axis, shoulder end up. Null until the body model is loaded.
+ */
+export function gibFrame(typeId) {
+  if (!template) return null;
+  let f = frames.get(typeId);
+  if (!f) {
+    const turn = new THREE.Quaternion(), centre = new THREE.Vector3();
+    if (typeId === 'gib_head' || typeId === 'gib_torso') {
+      const g = bodyGeo(typeId === 'gib_head' ? 'Head' : 'Torso');
+      g.computeBoundingBox(); g.boundingBox.getCenter(centre); g.dispose();
+    } else {
+      const j = armJoints();
+      const [a, b] = typeId === 'gib_upper' ? [j.shoulder, j.elbow] : typeId === 'gib_fore' ? [j.elbow, j.tip] : [j.shoulder, j.tip];
+      centre.copy(a).lerp(b, 0.5);
+      turn.setFromUnitVectors(b.clone().sub(a).normalize(), DOWN);
+    }
+    frames.set(typeId, f = { centre, turn });
+  }
+  return f;
+}
+
+/** Where a piece's wounds are, as points on the piece (for blood). Works without the model. */
+export function gibWounds(typeId, wounds, size = 1) {
+  const out = [], P = (x, y, z) => out.push(new THREE.Vector3(x, y, z).multiplyScalar(size));
+  if (typeId === 'gib_head') { if (wounds & 1) P(0, -0.1, 0); }
+  else if (typeId === 'gib_torso') {
+    if (wounds & 1) P(0, 0.26, 0);
+    if (wounds & 2) P(0.23, 0.14, 0);
+    if (wounds & 4) P(-0.23, 0.14, 0);
+  } else {
+    const len = typeId === 'gib_upper' ? RIG.upper : typeId === 'gib_fore' ? RIG.fore + RIG.hand : RIG.upper + RIG.fore + RIG.hand;
+    if (wounds & 1) P(0, len / 2, 0);
+    if (typeId === 'gib_upper' && wounds & 2) P(0, -len / 2, 0);
+  }
+  return out;
+}
 
 /**
- * A model for one body piece in the given skin colour, centred on itself, or null if
- * the body model is not loaded (then the prop falls back to a plain shape).
+ * A model for one body piece in the given skin colour, or null if the body model is not
+ * loaded (then the prop falls back to a plain shape).
  */
-export function makeGib(typeId, color) {
-  if (!template || !PIECES[typeId]) return null;
+export function makeGib(typeId, color, wounds = LOOSE[typeId] || 0) {
+  const frame = gibFrame(typeId);
+  if (!frame) return null;
   const skin = new THREE.Color(color), parts = [];
-  for (const name of PIECES[typeId]) {
-    const src = template.getObjectByName(name);
-    if (!src || !src.geometry) continue;
-    const g = src.geometry.index ? src.geometry.toNonIndexed() : src.geometry.clone();
-    for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k);
-    if (!g.attributes.normal) g.computeVertexNormals();
-    g.translate(src.position.x, src.position.y, src.position.z);       // where the part sits on a whole body
-    const c = name.endsWith('_cap') ? FLESH : skin, n = g.attributes.position.count, col = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) { col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; }
-    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    parts.push(g);
+  const add = (g, c = skin) => { if (g && g.attributes.position.count) parts.push(paint(g, c)); };
+  if (typeId === 'gib_head') {
+    add(bodyGeo('Head'));
+    if (wounds & 1) add(bodyGeo('Head_cap'), FLESH);
+  } else if (typeId === 'gib_torso') {
+    add(bodyGeo('Torso'));
+    const raw = bodyGeo('Torso_cap'), j = armJoints();
+    // the torso's raw inside is one piece: show only the part behind each wound
+    if (wounds & 1) add(pick(raw, c => Math.abs(c.x) < 0.09), FLESH); else add(ball([0.06, 0.05, 0.06], new THREE.Vector3(0, -0.125, -0.07)));
+    if (wounds & 2) add(pick(raw, c => c.x >= 0.09), FLESH); else add(ball(0.064, j.top));
+    if (wounds & 4) add(pick(raw, c => c.x <= -0.09), FLESH); else add(ball(0.064, j.top.clone().setX(-j.top.x)));
+    raw.dispose();
+  } else {
+    const j = armJoints();
+    if (typeId !== 'gib_fore') {
+      add(bodyGeo('UpperArm_L'));
+      const raw = bodyGeo('UpperArm_L_cap'), nearShoulder = c => c.distanceToSquared(j.shoulder) < c.distanceToSquared(j.elbow);
+      if (wounds & 1) add(pick(raw, nearShoulder), FLESH); else add(ball(0.058, j.top));
+      if (typeId === 'gib_upper' && wounds & 2) add(pick(raw, c => !nearShoulder(c)), FLESH); else add(ball(0.047, j.elbow));
+      raw.dispose();
+    }
+    if (typeId !== 'gib_upper') {
+      add(bodyGeo('Forearm_L')); add(bodyGeo('Hand_L')); add(ball(0.036, j.wrist));
+      if (typeId === 'gib_fore') {
+        const raw = bodyGeo('Forearm_L_cap');
+        if (wounds & 1) add(pick(raw, c => c.distanceToSquared(j.elbow) < c.distanceToSquared(j.wrist)), FLESH); else add(ball(0.047, j.elbow));
+        raw.dispose();
+      }
+    }
   }
   if (!parts.length) return null;
   const geo = mergeGeometries(parts);
   for (const g of parts) g.dispose();
-  // centre it, and lay arms along the prop's long (Y) axis
-  geo.computeBoundingBox();
-  const c = geo.boundingBox.getCenter(new THREE.Vector3());
-  geo.translate(-c.x, -c.y, -c.z);
-  if (typeId !== 'gib_head' && typeId !== 'gib_torso') {
-    const a = new THREE.Vector3().fromArray(template.getObjectByName(PIECES[typeId][0]).userData.from);
-    const b = new THREE.Vector3().fromArray(template.getObjectByName(PIECES[typeId].find(n => n.startsWith('Hand')) || PIECES[typeId][0]).userData.to);
-    geo.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(b.sub(a).normalize(), DOWN));
+  geo.translate(-frame.centre.x, -frame.centre.y, -frame.centre.z);
+  geo.applyQuaternion(frame.turn);
+  if (wounds & RIGHT && typeId !== 'gib_head' && typeId !== 'gib_torso') {
+    // a right arm: the left one seen in a mirror (which also turns every triangle inside out, so flip them back)
+    geo.scale(-1, 1, 1);
+    const p = geo.attributes.position, n = geo.attributes.normal, c = geo.attributes.color;
+    for (let i = 0; i < p.count; i += 3) for (const a of [p, n, c]) {
+      const x = a.getX(i + 1), y = a.getY(i + 1), z = a.getZ(i + 1);
+      a.setXYZ(i + 1, a.getX(i + 2), a.getY(i + 2), a.getZ(i + 2)); a.setXYZ(i + 2, x, y, z);
+    }
   }
   const mesh = new THREE.Mesh(geo, material);
   mesh.userData.dispose = () => geo.dispose();

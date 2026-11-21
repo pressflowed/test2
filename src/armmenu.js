@@ -45,13 +45,20 @@ const LAYOUT = {
     { id: 'clear', rect: [620, 350, 200, 230], label: 'Clear props', danger: true },
   ],
   3: [
-    { id: 'mode:sandbox', rect: [20, 105, 395, 150], label: 'Sandbox' },
-    { id: 'mode:hideseek', rect: [425, 105, 395, 150], label: 'Hide and seek' },
+    { id: 'mode:sandbox', rect: [20, 105, 266, 150], label: 'Sandbox' },
+    { id: 'mode:hideseek', rect: [287, 105, 266, 150], label: 'Hide and seek' },
+    { id: 'mode:arena', rect: [554, 105, 266, 150], label: 'Arena' },
+    // sandbox: bots and fighting in a row of their own
     { id: 'addbot', rect: [20, 318, 266, 126], only: 'sandbox' },
-    { id: 'clearbots', rect: [287, 318, 266, 126], label: 'Clear bots', only: 'sandbox' },
+    { id: 'clearbots', rect: [287, 318, 266, 126], only: 'sandbox' },
     { id: 'pvp', rect: [554, 318, 266, 126], only: 'sandbox' },
-    { id: 'skip', rect: [520, 450, 300, 130], label: 'Next round', only: 'hideseek' },
-    { id: 'mic', rect: [20, 450, 300, 130] },
+    { id: 'mic', rect: [20, 450, 300, 130], only: ['sandbox', 'hideseek'] },
+    { id: 'skip', rect: [520, 450, 300, 130], only: 'hideseek' },
+    // arena: everything along the bottom, under the bracket news
+    { id: 'mic', rect: [20, 450, 196, 130], only: 'arena' },
+    { id: 'addbot', rect: [218, 450, 196, 130], only: 'arena' },
+    { id: 'clearbots', rect: [416, 450, 196, 130], only: 'arena' },
+    { id: 'skip', rect: [614, 450, 206, 130], only: 'arena' },
   ],
 };
 
@@ -138,7 +145,7 @@ export class ArmMenu {
   // which control is at canvas pixel (px, py)?
   _pick(px, py) {
     for (const b of LAYOUT.tabs) if (inRect(b.rect, px, py)) return b.id;
-    for (const b of LAYOUT[this.tab]) if ((!b.only || b.only === this.mode) && inRect(b.rect, px, py)) return b.id;
+    for (const b of LAYOUT[this.tab]) if ((!b.only || b.only.includes(this.mode)) && inRect(b.rect, px, py)) return b.id;
     if (this.tab === 0 && !this.locked) {
       for (let i = 0; i < PER_PAGE; i++) {
         const t = PROP_TYPES[this.page * PER_PAGE + i];
@@ -246,13 +253,13 @@ export class ArmMenu {
       g.fillText(name, i * TAB_W + TAB_W / 2, 50);
     });
 
-    const button = (b, label, sub, on = false) => {
+    const button = (b, label, sub, on = false, size = 0) => {
       const [x, y, w, h] = b.rect, hot = this.hover === b.id;
       g.fillStyle = hot ? (b.danger ? '#7a2a1e' : C.hot) : C.panel;
       round(g, x + 5, y + 5, w - 10, h - 10, 22); g.fill();
       if (on) { g.strokeStyle = C.moss; g.lineWidth = 7; round(g, x + 9, y + 9, w - 18, h - 18, 18); g.stroke(); }
       g.fillStyle = b.danger ? C.ember : on ? C.moss : C.ink;
-      g.font = `bold ${label.length <= 1 ? 84 : label.length > 11 ? 30 : 36}px sans-serif`;
+      g.font = `bold ${size || (label.length <= 1 ? 84 : label.length > 11 ? 30 : 36)}px sans-serif`;
       g.fillText(label, x + w / 2, y + h / 2 - (sub ? 22 : 0) + (label.length <= 1 ? -4 : 0));
       if (sub) { g.fillStyle = C.moss; g.font = 'bold 40px sans-serif'; g.fillText(sub, x + w / 2, y + h / 2 + 30); }
     };
@@ -262,7 +269,7 @@ export class ArmMenu {
       lines.forEach((t, i) => g.fillText(t, CW / 2, y0 + i * 56));
     };
     if (this.tab === 0 && s.locked) {
-      note(['Items are for sandbox mode.', 'Hide and seek is bare hands only.']);
+      note(s.mode === 'arena' ? ['Items are for sandbox mode.', 'In the arena, take a weapon', 'from the wall of your room.'] : ['Items are for sandbox mode.', 'Hide and seek is bare hands only.']);
     } else if (this.tab === 0) {
       for (let i = 0; i < PER_PAGE; i++) {
         const t = PROP_TYPES[this.page * PER_PAGE + i];
@@ -295,26 +302,39 @@ export class ArmMenu {
         else button(b, b.label);
       }
     } else {
-      button(LAYOUT[3][0], 'Sandbox', null, s.mode === 'sandbox');
-      button(LAYOUT[3][1], 'Hide and seek', null, s.mode === 'hideseek');
-      const [addBot, clearBots, pvp, skip, mic] = LAYOUT[3].slice(2);
-      if (s.mode === 'hideseek') {
+      const here = LAYOUT[3].filter(b => !b.only || b.only.includes(s.mode)), B = id => here.find(b => b.id === id);
+      button(B('mode:sandbox'), 'Sandbox', null, s.mode === 'sandbox', 32);
+      button(B('mode:hideseek'), 'Hide and seek', null, s.mode === 'hideseek', 32);
+      button(B('mode:arena'), 'Arena', null, s.mode === 'arena', 32);
+      const lines = () => {
         g.textAlign = 'left';
         (s.game || []).forEach((t, i) => {
           g.fillStyle = i ? C.ink : C.moss; g.font = `bold ${i ? 34 : 42}px sans-serif`;
           g.fillText(t, 40, 310 + i * 52);
         });
         g.textAlign = 'center';
-        button(skip, 'Next round');
+      };
+      const mic = s.mic || 'Mic off';
+      if (s.mode === 'hideseek') {
+        lines();
+        button(B('skip'), 'Next round');
+        button(B('mic'), mic, null, mic === 'Mic on');
+      } else if (s.mode === 'arena') {
+        // the tournament: who is up, and fighters to fill the bracket
+        lines();
+        button(B('mic'), mic, null, mic === 'Mic on', 30);
+        button(B('addbot'), 'Add bot', `${s.bots || 0} of ${s.maxBots || 6}`, false, 30);
+        button(B('clearbots'), 'Clear bots', null, false, 30);
+        button(B('skip'), 'New bracket', null, false, 30);
       } else {
         // sandbox: dummies to beat up, and whether players can hurt each other
         g.fillStyle = C.muted; g.font = 'bold 32px sans-serif';
         g.fillText((s.game || [])[0] || '', CW / 2, 288);
-        button(addBot, 'Add bot', `${s.bots || 0} of ${s.maxBots || 6}`);
-        button(clearBots, 'Clear bots');
-        button(pvp, 'Fighting', s.pvp ? 'On' : 'Off', !!s.pvp);
+        button(B('addbot'), 'Add bot', `${s.bots || 0} of ${s.maxBots || 6}`);
+        button(B('clearbots'), 'Clear bots');
+        button(B('pvp'), 'Fighting', s.pvp ? 'On' : 'Off', !!s.pvp);
+        button(B('mic'), mic, null, mic === 'Mic on');
       }
-      button(mic, s.mic || 'Mic off', null, s.mic === 'Mic on');
     }
     this.tex.needsUpdate = true;
   }

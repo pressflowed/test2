@@ -245,7 +245,7 @@ const until = (page, fn, arg, ms = 15000) => page.waitForFunction(fn, arg, { tim
 
     // the host kills the friend, who comes back whole at the start
     await a.evaluate(id => game.session.hit(id, 'head', 250, 1), bId);
-    check(await until(b, () => game.session.body().dead && /You died/.test(game.hud.title) && !game.avatar.root.visible), 'the friend dies');
+    check(await until(b, () => game.session.body().dead && /lost your head/.test(game.hud.title) && !game.avatar.root.visible), 'the friend dies (a blow that hard takes the head off)');
     check(await until(a, id => game.session.body(id).dead && !game.session.players.get(id).avatar.root.visible && [...game.session.props.props.values()].some(p => p.type.id === 'gib_head'), bId), 'the host sees the friend fall apart');
     check(await until(b, () => !game.session.body().dead && game.session.body().blood === 100 && game.avatar.root.visible && Math.hypot(game.loco.head.x, game.loco.head.z - 6) < 3, null, 90000), 'and a few seconds later the friend is back at the start, whole');
     check(await until(a, id => !game.session.body(id).dead && game.session.players.get(id).avatar.root.visible, bId), 'the host sees the friend again');
@@ -327,6 +327,59 @@ const until = (page, fn, arg, ms = 15000) => page.waitForFunction(fn, arg, { tim
     await a.evaluate(() => game.session.setMode('sandbox'));
     check(await until(b, () => game.session.mode === 'sandbox' && game.loco.scale === 2 && game.voxels.solidAt(-24, 6, -24)), 'back in the sandbox, at the 2x size the friend had picked there');
     check(await until(a, () => game.loco.scale === 1 && game.session.role() === 'free'), 'host is back to normal too');
+
+    // ---- the arena: with two players, the two of them are the whole bracket
+    await b.evaluate(() => game.setSize(3));
+    await a.evaluate(() => { Object.assign(game.ARENA, { intro: 2, prep: 6, result: 3, champion: 5 }); });
+    await b.evaluate(() => game.session.setMode('arena'));
+    check(await until(a, () => game.session.mode === 'arena' && game.session.arena.phase !== 'waiting', null, 60000), 'the friend switched to the arena and a tournament began');
+    check(await until(b, () => game.session.mode === 'arena' && game.voxels.solidAt(13.5, 2, 0) && !game.voxels.solidAt(0, 1.5, -19), null, 60000), 'the friend has the colosseum too');
+    check(await until(a, () => game.session.arena.phase === 'prep', null, 120000), 'the match is called');
+    check(await until(b, () => game.session.arena.phase === 'prep' && game.session.role() === 'fighter' && Math.abs(game.loco.head.z) > 16.5, null, 30000), 'the friend is sent to a room');
+    check(await until(a, () => game.session.role() === 'fighter' && Math.abs(game.loco.head.z) > 16.5, null, 30000), 'and so is the host');
+    let ar = { a: await a.evaluate(() => ({ z: game.loco.head.z, gates: game.level.gatesOpen, bots: game.session.botCount, bracket: game.session.arena.rounds[0][0] })), b: await b.evaluate(() => ({ z: game.loco.head.z, gates: game.level.gatesOpen, racks: [...game.session.props.props.values()].filter(p => p.owner === 'rack').length, board: game.session.arena.rounds[0][0] })) };
+    check(ar.a.z * ar.b.z < 0 && !ar.a.gates && !ar.b.gates && ar.a.bots === 0, `they are at opposite ends behind shut gates, with no bots needed: ${JSON.stringify(ar)}`);
+    check(ar.b.racks === 12 && ar.b.board.slice(0, 2).sort().join() === ['h', bId].sort().join(), 'the friend sees the weapons and the bracket');
+    // the friend takes an axe off the wall
+    await b.evaluate(() => {
+      const T = game.THREE, axe = [...game.session.props.props.values()].filter(p => p.type.id === 'axe').sort((p, q) => p.mesh.position.distanceTo(game.loco.head) - q.mesh.position.distanceTo(game.loco.head))[0];
+      game.axe = axe.id;
+      game.loco.teleport(new T.Vector3(0, 0.25, axe.mesh.position.z), game.loco.yaw);
+      const d = axe.mesh.position.clone().sub(new T.Vector3(0, 1.05, axe.mesh.position.z)).applyAxisAngle(new T.Vector3(0, 1, 0), -game.loco.yaw);
+      game.desktop.yaw = Math.atan2(-d.x, -d.z); game.desktop.pitch = 0;
+    });
+    await b.waitForTimeout(1200);
+    await b.evaluate(() => { const p = game.session.props.props.get(game.axe).mesh.position; game.loco.origin.add(p.clone().sub(game.loco.hands[1].pos)); game.loco.vel.set(0, 0, 0); for (const h of game.handHist) h.length = 0; });
+    await b.waitForTimeout(1500);        // let the host see where the hand went
+    await b.evaluate(() => { const p = game.session.props.props.get(game.axe).mesh.position; game.loco.origin.add(p.clone().sub(game.loco.hands[1].pos)); game.desktop.keys.KeyG = true; game.desktop.pressed.add('KeyG'); });
+    check(await until(a, id => [...game.session.props.props.values()].some(p => p.type.id === 'axe' && p.held && p.held.key === id + ':1'), bId, 30000), 'the friend takes an axe off the wall');
+    await b.evaluate(() => { game.desktop.keys.KeyG = false; });
+    await b.waitForTimeout(600);
+    check(await b.evaluate(() => !!game.heldWeapon(1) && game.stuck[1] && game.desktop.hands[1].armed), 'and it stays in the friend\'s hand');
+    await b.screenshot({ path: path.join(out, 'mp-arena-armed.png') });
+    // before the gates open nobody can be hurt
+    await a.evaluate(id => game.session.hit(id, 'head', 100, 1), bId);
+    check(await a.evaluate(id => game.session.body(id).blood === 100 && !game.session.canHurt(id), bId), 'nobody can be hurt before the gates open');
+    check(await until(a, () => game.session.arena.phase === 'fight', null, 120000), 'the fight starts');
+    check(await until(b, () => game.session.arena.phase === 'fight' && game.level.gatesOpen && game.hud.title === 'FIGHT!', null, 30000), 'the friend\'s gate opens too');
+    // they meet in the middle; the friend's axe takes the host's forearm off in one blow
+    await a.evaluate(() => { game.loco.teleport(new game.THREE.Vector3(0.6, 0.3, 0), game.loco.yaw); });
+    await b.evaluate(() => { game.loco.teleport(new game.THREE.Vector3(-0.6, 0.3, 0), game.loco.yaw); });
+    await a.waitForTimeout(2000);
+    await b.evaluate(() => game.session.hit('h', 'foreL', 20, 1, game.axe));
+    check(await until(a, () => game.session.body().cut[0] === 1 && /forearm is gone/.test(game.hud.title), null, 30000), 'the friend\'s axe takes the host\'s forearm off in one blow');
+    // the host knocks the friend's head off
+    await a.evaluate(id => game.session.hit(id, 'head', 250, 1), bId);
+    check(await until(b, () => game.session.body().dead && /lost your head/.test(game.hud.title), null, 30000), 'the host knocks the friend\'s head off, and the friend is told so');
+    check(await until(a, () => game.session.arena.phase === 'result' && game.session.arena.w === 'h' && game.hud.title === 'You win!', null, 30000), 'the host wins the fight');
+    check(await until(b, () => game.session.arena.w === 'h' && [...game.session.props.props.values()].some(p => p.type.id === 'gib_head' && !p.rag) && [...game.session.props.props.values()].some(p => p.type.id === 'gib_torso' && p.wounds & 1), null, 30000), 'the friend sees their own headless body and the head lying apart');
+    await b.waitForTimeout(1500);
+    await b.screenshot({ path: path.join(out, 'mp-arena-dead.png') });
+    check(await until(a, () => game.session.arena.phase === 'champion' && game.session.arena.champion === 'h', null, 60000), 'and is the champion');
+    check(await until(b, () => game.session.arena.champion === 'h' && /is the champion/.test(game.hud.title), null, 30000), 'the friend sees who won');
+    check(await until(b, () => !game.session.body().dead && game.session.role() === 'spectator' && Math.hypot(game.loco.head.x, game.loco.head.z) > 15, null, 90000), 'the friend comes back to life in the seats');
+    await a.evaluate(() => game.session.setMode('sandbox'));
+    check(await until(b, () => game.session.mode === 'sandbox' && game.session.role() === 'free' && game.session.props.props.size === 0, null, 60000), 'back to the sandbox');
 
     // friend leaves; host's room empties
     await b.evaluate(() => game.session.leave());
