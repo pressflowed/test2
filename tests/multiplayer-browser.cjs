@@ -191,7 +191,7 @@ const until = (page, fn, arg, ms = 15000) => page.waitForFunction(fn, arg, { tim
     await b.waitForTimeout(1500);
     await b.evaluate(() => game.session.hit('b1', 'head', 30, 1));
     check(await until(a, () => game.session.body('b1').blood < 80), 'the friend\'s punch hurts the bot on the host');
-    check(await until(b, () => game.session.body('b1').blood < 80 && window.fx.includes('hit:b1') && game.blood.drops.length + game.blood.splats.length > 0), 'and the friend sees it bleed');
+    check(await until(b, () => game.session.body('b1').blood < 80 && window.fx.includes('hit:b1') && (game.blood.count().drops + game.blood.count().splats) > 0), 'and the friend sees it bleed');
     // the mouse shortcut: the friend takes the bot's arm off, and ends up holding it
     await b.evaluate(() => game.session.ripArm('b1', 0, 1));
     check(await until(a, () => game.session.body('b1').cut[0] === 2 && [...game.session.props.props.values()].some(p => p.type.id === 'gib_arm')), 'the friend tore the bot\'s arm off');

@@ -1,6 +1,7 @@
 // Words in front of your eyes: a big message that fades (round start, caught...), a
 // small status line (role and timer), a blood bar when you are hurt, a red flash when
-// you are hit, and the blackout for a waiting giant or a dead player.
+// you are hit, blood spattered across your view when it happens close up, and the
+// blackout for a waiting giant.
 import * as THREE from 'three';
 
 export class Hud {
@@ -22,6 +23,16 @@ export class Hud {
     this.red.renderOrder = 49;
     this.red.visible = false;
     scene.add(this.red);
+    // blood on your face: blotches round the edge of your view, which fade
+    this.goreCv = document.createElement('canvas');
+    this.goreCv.width = this.goreCv.height = 512;
+    this.goreTex = new THREE.CanvasTexture(this.goreCv);
+    this.goreTex.colorSpace = THREE.SRGBColorSpace;
+    this.gore = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.goreTex, transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false }));
+    this.gore.renderOrder = 48;
+    this.gore.visible = false;
+    scene.add(this.gore);
+    this.goreT = 0;           // seconds of it left
     this.pain = 0;
     this.blood = null;        // null hides the bar; otherwise { value, max, bleeding }
     this.title = ''; this.sub = ''; this.until = 0; this.color = '#f4eed6';
@@ -41,6 +52,27 @@ export class Hud {
 
   /** Flash red: amount 0..1. */
   hurt(amount) { this.pain = Math.min(1, Math.max(this.pain, amount)); }
+
+  /** Blood hits your face: `n` more blotches round the edge of your view. They fade after a few seconds. */
+  splatter(n = 3) {
+    const g = this.goreCv.getContext('2d');
+    if (this.goreT <= 0) g.clearRect(0, 0, 512, 512);
+    for (let i = 0; i < n; i++) {
+      // towards the edges, so the middle of your view stays clear
+      const a = Math.random() * Math.PI * 2, d = 150 + Math.random() * 95, x = 256 + Math.cos(a) * d, y = 256 + Math.sin(a) * d * 0.9, r = 12 + Math.random() * 30;
+      g.fillStyle = `rgba(${110 + Math.floor(Math.random() * 40)},6,6,${0.75 + Math.random() * 0.2})`;
+      g.beginPath();
+      for (let k = 0; k < 9; k++) { const t = k / 9 * Math.PI * 2, rr = r * (0.7 + Math.random() * 0.5); g[k ? 'lineTo' : 'moveTo'](x + Math.cos(t) * rr, y + Math.sin(t) * rr); }
+      g.closePath(); g.fill();
+      // it runs
+      const len = r * (1 + Math.random() * 3.5), w = Math.max(3, r * 0.22);
+      g.fillRect(x - w / 2 + (Math.random() - 0.5) * r * 0.6, y, w, len);
+      g.beginPath(); g.arc(x, y + len, w * 0.8, 0, 7); g.fill();
+      for (let k = 0; k < 5; k++) { g.beginPath(); g.arc(x + (Math.random() - 0.5) * r * 4, y + (Math.random() - 0.5) * r * 4, 2 + Math.random() * 5, 0, 7); g.fill(); }
+    }
+    this.goreTex.needsUpdate = true;
+    this.goreT = Math.min(this.goreT + 4 + n * 0.6, 12);
+  }
 
   update(dt, headPos, headQuat, scale) {
     const now = performance.now();
@@ -62,6 +94,15 @@ export class Hud {
     else this._pos.lerp(this._want, 1 - Math.exp(-7 * dt));
     this.sprite.position.copy(this._pos);
     this.sprite.scale.set(1.3 * scale, 0.65 * scale, 1);
+
+    // blood on your face stays right in front of your eyes
+    this.goreT = Math.max(0, this.goreT - dt);
+    this.gore.visible = this.goreT > 0;
+    if (this.gore.visible) {
+      this.gore.position.set(0, 0, -0.5).multiplyScalar(scale).applyQuaternion(headQuat).add(headPos);
+      this.gore.scale.set(1.15 * scale, 0.95 * scale, 1);
+      this.gore.material.opacity = Math.min(1, this.goreT / 3) * 0.85;
+    }
 
     this.dark.visible = this.blind;
     if (this.blind) { this.dark.position.copy(headPos); this.dark.scale.setScalar(0.9 * scale); }

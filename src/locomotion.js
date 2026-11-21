@@ -100,6 +100,7 @@ export class Locomotion {
 
   /** Change the player's size, keeping their feet where they are. */
   setScale(scale, headLocal) {
+    this.jumps = (this.jumps || 0) + 1;
     const head = this.toWorld(headLocal, this._tmp);
     const feetY = head.y - this.cfg.bodyHeight * this.scale;
     this.scale = scale;
@@ -113,6 +114,7 @@ export class Locomotion {
 
   /** Put the rig at `pos` (rig origin, i.e. the floor under the play space centre). */
   teleport(pos, yaw = this.yaw) {
+    this.jumps = (this.jumps || 0) + 1;      // (the hands just moved without being swung: see main.js)
     this.origin.copy(pos);
     this.yaw = yaw;
     this.vel.set(0, 0, 0);
@@ -123,6 +125,7 @@ export class Locomotion {
 
   /** Snap turn around the head, so the view turns in place. */
   turn(angle, headLocal) {
+    this.jumps = (this.jumps || 0) + 1;
     const head = this.toWorld(headLocal, this._tmp);
     this.yaw += angle;
     const offset = this._tmp2.copy(headLocal).multiplyScalar(this.scale).applyAxisAngle(UP, this.yaw);

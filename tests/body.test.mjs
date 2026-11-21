@@ -62,6 +62,42 @@ test('a blade cuts where a fist only bruises', () => {
   assert.ok(c.blood < a.blood, 'and it goes deeper into the body');
 });
 
+test('a blade that goes deep enough cuts a body in two; fists and clubs never do', () => {
+  const b = new Body();
+  assert.deepEqual(types(b.hit('torso', 34, { sharp: true })), ['hit']);
+  assert.ok(!b.dead && !b.halved);
+  assert.deepEqual(types(b.hit('torso', 34, { sharp: true })), ['hit', 'bisect', 'die']);
+  assert.ok(b.dead && b.halved && !b.headOff);
+  // a hard killing cut goes through even if the body had not been cut much before
+  const c = new Body();
+  c.blood = 20;
+  assert.ok(types(c.hit('torso', 30, { sharp: true })).includes('bisect'));
+  // blunt: dead, but in one piece
+  const d = new Body();
+  let ev = [];
+  for (let i = 0; i < 20 && !d.dead; i++) ev.push(...d.hit('torso', 40, { blunt: true }));
+  assert.ok(d.dead && !d.halved && !types(ev).includes('bisect'));
+  run(b, BODY.respawn + 0.1);
+  assert.ok(!b.dead && !b.halved && b.hp.torso === BODY.hp.torso, 'whole again afterwards');
+});
+
+test('a heavy blunt weapon bursts a head instead of knocking it off', () => {
+  const fist = new Body(), hammer = new Body();
+  const a = fist.hit('head', 80), b = hammer.hit('head', 80, { blunt: true });
+  assert.deepEqual([a.find(e => e.type === 'behead').crushed, b.find(e => e.type === 'behead').crushed], [false, true]);
+  assert.ok(fist.headOff && !fist.crushed && hammer.headOff && hammer.crushed);
+});
+
+test('being made whole again is counted, so old bloodstains can be wiped', () => {
+  const b = new Body(), g = b.gen;
+  b.hit('head', 500);
+  run(b, BODY.respawn + 0.1);
+  assert.equal(b.gen, g + 1);
+  assert.equal(b.pack()[8], b.gen);
+  const far = new Body(); far.apply(b.pack());
+  assert.equal(far.view.gen, b.gen, 'and other players are told');
+});
+
 test('with one arm gone you bleed, it clots, and you live on with a lower blood limit', () => {
   const b = new Body();
   b.sever(1, 2);

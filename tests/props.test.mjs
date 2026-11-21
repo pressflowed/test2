@@ -278,3 +278,31 @@ test('a weapon hung on a rack stays there until it is taken', () => {
   steps(props, 200);
   assert.ok(axe.mesh.position.y < 0.3, 'dropped, it falls');
 });
+
+test('a weapon gets bloodier each time it is used, up to a point, and joined players see that', () => {
+  const { props } = setup(), far = setup(false).props;
+  const sword = props.spawn('sword', V(0, 1, 0), null), clean = sword.mesh.geometry;
+  assert.equal(sword.wounds, 0);
+  props.bloody(sword);
+  assert.equal(sword.wounds, 1);
+  assert.notEqual(sword.mesh.geometry, clean, 'it looks different');
+  const red = g => { const c = g.attributes.color; let n = 0; for (let i = 0; i < c.count; i++) n += c.getX(i) - c.getY(i); return n; };     // how much more red than green
+  const once = red(sword.mesh.geometry);
+  assert.ok(once > red(clean) + 1, 'redder');
+  for (let i = 0; i < 6; i++) props.bloody(sword);
+  assert.equal(sword.wounds, 3, 'no more than soaked');
+  assert.ok(red(sword.mesh.geometry) > once + 1, 'and redder still');
+  far.applySnapshot(props.snapshot());
+  const copy = [...far.props.values()][0];
+  assert.equal(copy.wounds, 3);
+  assert.equal(copy.mesh.geometry, sword.mesh.geometry, 'the same bloody sword');
+  props.bloody(props.spawn('crate', V(2, 1, 0)));          // (nothing happens to things that are not weapons)
+});
+
+test('the halves of a body and its guts are props like any other piece', () => {
+  const { props } = setup();
+  const chest = props.spawn('gib_chest', V(0, 1, 0), null, { owner: 'gib' }), belly = props.spawn('gib_belly', V(1, 1, 0), null, { owner: 'gib' }), guts = props.spawn('gib_guts', V(2, 1, 0), null, { owner: 'gib' });
+  assert.ok(chest.wounds & 16 && belly.wounds & 16, 'cut sides bleed');
+  steps(props, 240);
+  for (const p of [chest, belly, guts]) assert.ok(p.mesh.position.y < 0.3 && p.mesh.position.y > 0, `${p.type.id} lies on the ground`);
+});

@@ -3,9 +3,10 @@
 // with two-bone IK (the same maths as src/bodyrig.js, which works out hits).
 // Uses assets/body-rig.glb made by tools/build_body.py.
 //
-// Damage shows on the body: a badly hurt arm segment loses its flesh and shows bone,
-// a lost arm leaves a red stump, and a dead body is not drawn at all (its pieces are
-// lying around as props instead).
+// Damage shows on the body: blood stains it where it is hit (and stains the fists that
+// did the hitting), a badly hurt arm segment loses its flesh and shows bone, a lost arm
+// leaves a red stump with the bone end showing, and a dead body is not drawn at all
+// (it is lying around as props instead).
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -21,6 +22,7 @@ const Y_FLIP = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0
 const FINGERS = new THREE.Vector3(0, -1, 0);
 
 export const SKIN = 0xe0ac86;
+const BLOOD = new THREE.Color(0x7a0a0a);
 const fleshMat = new THREE.MeshLambertMaterial({ color: 0x8c1212, flatShading: true });
 const boneMat = new THREE.MeshLambertMaterial({ color: 0xe6d9b8, side: THREE.DoubleSide });
 const eyeMat = new THREE.MeshBasicMaterial({ color: 0x14100e });
@@ -69,14 +71,15 @@ export class Avatar {
     this.scene = scene;
     const mesh = {};
     src.traverse(o => { if (o.isMesh) mesh[o.name] = o; });
-    this.skin = new THREE.MeshLambertMaterial({ color, flatShading: true });
+    this.skin = new THREE.MeshLambertMaterial({ color, flatShading: true, vertexColors: true });      // vertex colours carry the bloodstains
     for (const [n, m] of Object.entries(mesh)) {
       m.material = n.startsWith('Bone_') ? boneMat : n.endsWith('_cap') ? fleshMat : this.skin;
       m.frustumCulled = false;
       m.position.set(0, 0, 0);          // every part sits at its own pivot, placed below
     }
     const v = a => new THREE.Vector3().fromArray(a);
-    const ball = r => { const b = new THREE.Mesh(ballGeo, this.skin); b.scale.setScalar(r); b.frustumCulled = false; return b; };
+    const ball = r => { const b = new THREE.Mesh(ballGeo, this.plainSkin || (this.plainSkin = new THREE.MeshLambertMaterial({ color, flatShading: true }))); b.scale.setScalar(r); b.frustumCulled = false; return b; };
+    const nub = r => { const b = new THREE.Mesh(ballGeo, boneMat); b.scale.setScalar(r); b.frustumCulled = false; b.visible = false; return b; };
 
     // root: follows the head position and turns with the view (yaw only). Holds the torso.
     this.root = new THREE.Group();
@@ -112,6 +115,9 @@ export class Avatar {
       const top = elbow.clone().sub(shoulder).setLength(0.09);
       upper.flesh.geometry = withBall(upper.flesh.geometry, 0.058, top);
       const stub = ball(0.064); stub.position.copy(shoulder).add(top); this.root.add(stub);
+      // the ends of the bones that show in a stump: at the elbow, and at the shoulder
+      upper.nub = nub(0.019); upper.nub.position.copy(elbow).sub(shoulder).multiplyScalar(1.02); upper.g.add(upper.nub);
+      const socket = nub(0.024); socket.position.copy(shoulder).addScaledVector(top, 0.98); this.root.add(socket);
       // the raw end of a torn-off shoulder, for your own view of yourself (see setBody)
       const wound = new THREE.Mesh(ballGeo, fleshMat);
       wound.scale.setScalar(0.066); wound.position.copy(stub.position); wound.frustumCulled = false; wound.visible = false;
@@ -120,13 +126,26 @@ export class Avatar {
       hand.flesh.geometry = withBall(hand.flesh.geometry, 0.036);
       return {
         side: i === 0 ? 1 : -1,   // the character's left is +X in avatar space
-        upper, fore, hand, shoulder, stub, wound,
+        upper, fore, hand, shoulder, stub, wound, socket,
         upperLen: shoulder.distanceTo(elbow), foreLen: elbow.distanceTo(wrist),
         upperDir: elbow.clone().sub(shoulder).normalize(),
         foreDir: wrist.clone().sub(elbow).normalize(),
         handFit: fitHand(tip.clone().sub(wrist).normalize(), v(hd.palm), i === 0 ? 1 : -1),
       };
     });
+    // Each body gets its own copy of the skin (a few hundred triangles), so it can be stained.
+    mesh.Head.geometry = plain(mesh.Head.geometry);
+    const A = this.arms;
+    this.parts = {
+      head: [mesh.Head], torso: [this.torso],
+      upperL: [A[0].upper.flesh], foreL: [A[0].fore.flesh, A[0].hand.flesh], upperR: [A[1].upper.flesh], foreR: [A[1].fore.flesh, A[1].hand.flesh],
+    };
+    for (const list of Object.values(this.parts)) for (const m of list) {
+      if (m !== mesh.Head) m.geometry = m.geometry.clone();
+      m.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(m.geometry.attributes.position.count * 3).fill(1), 3));
+    }
+    this._stained = false;
+    this._gen = 0;
     this._q = new THREE.Quaternion();
     this._v = [0, 1, 2, 3, 4, 5].map(() => new THREE.Vector3());
     this._first = false;
@@ -138,16 +157,47 @@ export class Avatar {
 
   set firstPerson(on) { this._first = on; this.head.visible = !on; this.setBody(this._view); }
 
-  setColor(hex) { this.skin.color.setHex(hex); }
+  setColor(hex) { this.skin.color.setHex(hex); if (this.plainSkin) this.plainSkin.color.setHex(hex); }
+
+  /**
+   * Blood on the skin. part: 'head', 'torso', 'upperL', 'foreL', 'upperR' or 'foreR'; point: where
+   * (world space); radius in metres; amount 0..1. It stays until the body is whole again.
+   */
+  stain(part, point, radius = 0.12, amount = 0.7) {
+    const skin = this.skin.color, to = [Math.min(1, BLOOD.r / skin.r), Math.min(1, BLOOD.g / skin.g), Math.min(1, BLOOD.b / skin.b)];
+    for (const m of this.parts[part] || []) {
+      m.updateWorldMatrix(true, false);
+      const at = m.worldToLocal(this._v[5].copy(point)), r = radius / (m.getWorldScale(this._v[4]).x || 1);
+      const p = m.geometry.attributes.position, c = m.geometry.attributes.color;
+      const paint = (i, k) => c.setXYZ(i, c.getX(i) + (to[0] - c.getX(i)) * k, c.getY(i) + (to[1] - c.getY(i)) * k, c.getZ(i) + (to[2] - c.getZ(i)) * k);
+      let nearest = -1, best = r * 2.5;
+      for (let i = 0; i < p.count; i++) {
+        const d = Math.hypot(p.getX(i) - at.x, p.getY(i) - at.y, p.getZ(i) - at.z);
+        if (d < best) { best = d; nearest = i; }
+        if (d <= r) paint(i, amount * (1 - 0.55 * d / r));
+      }
+      // the body has few, big triangles: whatever else, the one that was hit gets it
+      if (nearest >= 0) { const t = nearest - nearest % 3; for (let k = 0; k < 3; k++) paint(t + k, amount * 0.85); c.needsUpdate = true; this._stained = true; }
+    }
+  }
+  /** Wash it all off. */
+  clean() {
+    if (!this._stained) return;
+    this._stained = false;
+    for (const list of Object.values(this.parts)) for (const m of list) { m.geometry.attributes.color.array.fill(1); m.geometry.attributes.color.needsUpdate = true; }
+  }
 
   /** Caught players fade to see-through ghosts. */
   setGhost(on) {
     if (this._ghost === on) return;
     this._ghost = on;
-    this.skin.transparent = on;
-    this.skin.opacity = on ? 0.28 : 1;
-    this.skin.depthWrite = !on;
-    this.skin.needsUpdate = true;
+    for (const m of [this.skin, this.plainSkin]) {
+      if (!m) continue;
+      m.transparent = on;
+      m.opacity = on ? 0.28 : 1;
+      m.depthWrite = !on;
+      m.needsUpdate = true;
+    }
   }
 
   /** Floating name tag above the head. */
@@ -171,7 +221,9 @@ export class Avatar {
   dispose() {
     this.scene.remove(this.root);
     for (const a of this.arms) this.scene.remove(a.upper.g, a.fore.g, a.hand.g);
+    for (const list of Object.values(this.parts)) for (const m of list) m.geometry.dispose();
     this.skin.dispose();
+    if (this.plainSkin) this.plainSkin.dispose();
     if (this.label) { this.label.material.map.dispose(); this.label.material.dispose(); }
   }
 
@@ -181,6 +233,8 @@ export class Avatar {
    */
   setBody(view) {
     const cut = view ? view.cut : [0, 0], dead = !!(view && view.dead), strip = view ? view.stripped : 0;
+    // made whole again since last time: the blood is gone too
+    if (view && view.gen !== this._gen) { this._gen = view.gen; this.clean(); }
     const key = `${cut[0]}${cut[1]}${dead ? 1 : 0}${strip}${this._first ? 1 : 0}`;
     this._view = view;
     if (key === this._look) return;
@@ -201,7 +255,9 @@ export class Avatar {
       a.fore.flesh.visible = !foreBare; a.fore.bone.visible = foreBare;
       a.upper.flesh.visible = !upperBare; a.upper.bone.visible = upperBare;
       a.hand.flesh.visible = !foreBare; a.hand.bone.visible = foreBare;
-      a.upper.cap.visible = c === 1 && !upperBare;              // the stump below a lost forearm
+      a.upper.cap.visible = c === 1 && !upperBare;              // the stump below a lost forearm...
+      a.upper.nub.visible = c === 1;                            // ...with the end of the bone in it
+      a.socket.visible = c === 2;
     }
   }
 

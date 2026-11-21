@@ -72,12 +72,31 @@ const BUILD = {
   ],
 };
 
-/** { geo, mat } for a weapon, shared by every copy of it. */
-export function weaponVisual(id) {
-  if (!cache[id]) {
-    const parts = BUILD[id]();
-    cache[id] = { geo: mergeGeometries(parts), mat: material };
-    for (const g of parts) g.dispose();
+/**
+ * { geo, mat } for a weapon, shared by every copy of it. `blood` (0 to 3) is how much of
+ * it there is on the business end: a weapon gets redder each time it is used on someone.
+ */
+export const MAX_BLOOD = 3;
+export function weaponVisual(id, blood = 0) {
+  blood = Math.min(Math.max(blood | 0, 0), MAX_BLOOD);
+  const key = id + ':' + blood;
+  if (!cache[key]) {
+    if (blood === 0) {
+      const parts = BUILD[id]();
+      cache[key] = { geo: mergeGeometries(parts), mat: material };
+      for (const g of parts) g.dispose();
+    } else {
+      // the clean one, with red worked into everything from the first striking point outward
+      const geo = weaponVisual(id).geo.clone(), p = geo.attributes.position, c = geo.attributes.color, w = WEAPONS[id];
+      const from = Math.min(...w.hits.map(h => h[1])) - 0.12, red = new THREE.Color(0x7a0808);
+      for (let i = 0; i < p.count; i++) {
+        if (p.getY(i) < from) continue;
+        const tri = Math.floor(i / 3), patchy = ((Math.imul(tri + 7, 2654435761) >>> 0) % 1000) / 1000;        // the same blotches every time
+        const k = Math.min(1, (blood / MAX_BLOOD) * (0.7 + 0.9 * patchy));
+        c.setXYZ(i, c.getX(i) + (red.r - c.getX(i)) * k, c.getY(i) + (red.g - c.getY(i)) * k, c.getZ(i) + (red.b - c.getZ(i)) * k);
+      }
+      cache[key] = { geo, mat: material };
+    }
   }
-  return cache[id];
+  return cache[key];
 }

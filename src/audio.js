@@ -194,3 +194,40 @@ export function tear(vol = 1) {
   g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
   o.connect(g).connect(ac.destination); o.start(t + 0.17); o.stop(t + 0.42);
 }
+
+/** Something wet being cut or burst: a blade going in, a body coming apart. vol 0..1 */
+export function squelch(vol = 1) {
+  if (!ac || vol < 0.02) return;
+  const t = ac.currentTime;
+  for (let i = 0; i < 3; i++) {
+    const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+    const at = t + i * 0.04;
+    s.buffer = noise; f.type = 'bandpass'; f.Q.value = 3;
+    f.frequency.setValueAtTime(900 - i * 200 + Math.random() * 200, at);
+    f.frequency.exponentialRampToValueAtTime(180, at + 0.12);
+    g.gain.setValueAtTime(0.7 * vol, at); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.13);
+    s.connect(f).connect(g).connect(ac.destination); s.start(at); s.stop(at + 0.14);
+  }
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.15);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.5 * vol, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+  o.connect(g).connect(ac.destination); o.start(t); o.stop(t + 0.22);
+}
+
+/** Bone breaking: a dry snap. vol 0..1 */
+export function crack(vol = 1) {
+  if (!ac || vol < 0.02) return;
+  const t = ac.currentTime;
+  for (const [at, f] of [[0, 2600], [0.035, 1700]]) {
+    const s = ac.createBufferSource(), hp = ac.createBiquadFilter(), g = ac.createGain();
+    s.buffer = noise; hp.type = 'highpass'; hp.frequency.value = f;
+    g.gain.setValueAtTime(0.9 * vol, t + at); g.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.035);
+    s.connect(hp).connect(g).connect(ac.destination); s.start(t + at); s.stop(t + at + 0.04);
+  }
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = 'square';
+  o.frequency.setValueAtTime(420, t); o.frequency.exponentialRampToValueAtTime(140, t + 0.05);
+  g.gain.setValueAtTime(0.25 * vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+  o.connect(g).connect(ac.destination); o.start(t); o.stop(t + 0.07);
+}

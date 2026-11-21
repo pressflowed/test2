@@ -67,7 +67,9 @@ In the sandbox and the arena (hide and seek has no fighting). Everyone has a bod
 - **Punch** someone with a fast hand to hurt them. Faster punches and bigger players hit harder; bigger bodies shrug more off. Head hits hurt most.
 - **Blood:** you have 100. Wounds bleed for a few seconds and then stop; after 6 quiet seconds blood slowly comes back. A blood bar appears when you are hurt, your view flashes red, and your heart pounds when you are low. At 0 you die and come back 6 seconds later, whole again.
 - **Dying:** your body drops where it stood as a **ragdoll**: head, torso and whatever arms it had left, jointed together and floppy. You drift up out of it and watch it fall. Bodies can be shoved about and dragged by an arm (grip). A body killed by TNT is blown to pieces instead.
-- **Heads:** a head can take about two hard punches (or one good blow from an axe) and then it comes off, which kills you at once. The head flies off on its own and the body drops without it.
+- **Heads:** a head can take about two hard punches (or one good blow from an axe) and then it comes off, which kills you at once. The head flies off on its own and the body drops without it. A club or a war hammer does not knock a head off: it **bursts** it, and there is nothing left but bits.
+- **Cut in half:** a blade that goes deep enough into the body (a couple of good sword cuts, or the killing blow) goes right through. The top half drops with the head and arms; the bottom half and the guts fall apart from it.
+- **Blood everywhere:** hits spray it, stumps spurt with every heartbeat, a severed neck fountains. It marks the ground, **sticks to walls and runs down them**, and a body lies in a pool that spreads and leaves a smear where it is dragged. Chunks of meat and splinters of bone fly off and lie about. Blood **stains** the body where it was hit, the fist that hit it and the blade that cut it, until that player is whole again. When it happens close to you, it spatters across your view.
 - **Arms:** each arm can be punched off, at the elbow or the shoulder (a badly hurt arm shows bone first). Or **grab** it: squeeze grip on someone's arm with a slow hand, then pull. Stretch it about 1.3 arm-lengths from the shoulder and it tears off in your hand; you can throw it or hit things with it. A held arm slips free after 4 seconds.
 - **One arm gone:** you bleed for 12 seconds, then it stops. You live, but you can only push, grab and punch with the arm you have left, and you can only heal back to 85 blood.
 - **Both arms gone:** the bleeding does not stop. You have less than 10 seconds.
@@ -75,7 +77,7 @@ In the sandbox and the arena (hide and seek has no fighting). Everyone has a bod
 - **TNT** hurts everyone near it and can take arms off.
 - **Bots:** the **Game** tab of the arm menu has **Add bot** (up to 6) and **Clear bots**. In the sandbox they are dummies: they hop around with no plan, flinch when hit, and hop away when you grab them (which is how their arms come off). They can always be hurt. (In the arena they fight back: they come at their opponent and swing.)
 - **Fighting** (Game tab) switches whether *players* can hurt each other. It is on to begin with. Turn it off to build in peace; TNT then only throws you around, as before.
-- Bodies and body pieces lie around for 45 seconds. They are ordinary props: grab them, throw them.
+- Bodies and body pieces lie around for 80 seconds. They are ordinary props: grab them, throw them.
 
 ### In VR
 - **Move:** push the ground down and back. Fast strokes, then let go, to leap. Push down on walls to climb.
@@ -135,9 +137,9 @@ npm run serve          # http://localhost:8000 for desktop testing
 | `src/armmenu.js` | The arm menu: tabs, buttons you poke, item previews you grab |
 | `src/textures.js` | All textures, painted on canvases at startup (no image files) |
 | `src/sky.js` | Sky dome, sun, clouds, stars; day, sunset and night |
-| `src/fx.js` | Blob shadows, explosion flashes, rubble and blood |
+| `src/fx.js` | Blob shadows, explosion flashes, rubble, and blood: droplets, marks on floors and walls, pools, and chunks of meat |
 | `src/sandbox.js` | What cannot be broken: the lawn, the border walls, the sandbox control panel and board, the arena's gates and bracket boards |
-| `src/hud.js` | Messages in front of your eyes, the round status line, the blood bar, the red flash when hurt, and the giant's blackout |
+| `src/hud.js` | Messages in front of your eyes, the round status line, the blood bar, the red flash when hurt, blood spattered on your view, and the giant's blackout |
 | `assets/body-rig.glb` | The player model: flesh from `assets/man.glb` (legs removed, cut into head, torso and arm pieces) with the arm bones from `assets/skeleton-rig.glb` inside. Made by `tools/build_body.py` |
 | `assets/skeleton-rig.glb` | The skeleton, made from `assets/skeleton.glb` by `tools/split_skeleton.py` |
 | `prototype/desktop.html` | The first desktop-only prototype, with the forest arena, bots and infection tag (used in Phase 2) |

@@ -13,7 +13,7 @@ import * as THREE from 'three';
 import { PropWorld, SPAWNABLE, TYPE, MAX_GIBS, weaponHold } from './props.js';
 import { WEAPONS } from './weapons.js';
 import { Tournament } from './arena.js';
-import { gibFrame, LOOSE, RIGHT } from './gibs.js';
+import { gibFrame, LOOSE, RIGHT, CUT } from './gibs.js';
 import { Avatar } from './avatar.js';
 import { MAPS, COLOSSEUM } from './maps.js';
 import { Rounds } from './rounds.js';
@@ -71,7 +71,8 @@ export class Session {
     this.onThump = () => {};    // (THREE.Vector3, strength 0..1) something huge shook the ground
     this.peers = new Map();     // other players: id -> PeerJS id, for voice calls
     this.onBodyFx = () => {};   // ({ k: 'hit'|'sever'|'die'|'respawn'|'grab', id, ... }) something happened to a body
-    this.onBleed = () => {};    // (THREE.Vector3) a wound dripped here
+    this.onBleed = () => {};    // (pos, dir | null, spurt, scale) a wound dripped, or a stump spurted, here
+    this._dir = new THREE.Vector3();
     this.bodies = new Map();    // id -> Body, for me, every other player and every bot
     this.poses = new Map();     // id -> { head, hands, scale } this frame
     this.rigs = new Map();      // id -> joints (see bodyrig.js)
@@ -579,7 +580,9 @@ export class Session {
     const arm = part.endsWith('L') ? 0 : 1, gone = part !== 'torso' && part !== 'head' && tb.cut[arm] >= (part.startsWith('fore') ? 1 : 2);
     const dmg = (w ? w.dmg * 0.65 : 13) * (0.8 + Math.random() * 0.4);
     const dir = tp.head.pos.clone().sub(ap.head.pos).setY(0).normalize();
-    this._bodyEvents(foe, tb.hit(gone ? 'torso' : part, dmg, { sharp: !!(w && w.sharp) }), { by: id, dir, push: Math.min(dmg / 10, 4.5) * (w ? w.knock : 1), sharp: !!(w && w.sharp) });
+    const sharp = !!(w && w.sharp), blunt = !!(w && !w.sharp);
+    if (w) this.props.bloody(held);
+    this._bodyEvents(foe, tb.hit(gone ? 'torso' : part, dmg, { sharp, blunt }), { by: id, hand: Number(held ? held.held.key.split(':')[1] : body.canUse(1) ? 1 : 0), dir, push: Math.min(dmg / 10, 4.5) * (w ? w.knock : 1), sharp, blunt });
   }
 
   _setRound(round) {
@@ -688,7 +691,9 @@ export class Session {
     const w = held && held.type.weapon && held.held && held.held.key === `${from}:${hand}` ? held.type.weapon : null;
     const dmg = Math.min(Math.max(Number(msg.power) || 0, 0), 250) / Math.pow(tp.scale, 1.5);  // bigger bodies shrug more off
     const dir = tp.head.pos.clone().sub(ap.head.pos).setY(0).normalize();
-    this._bodyEvents(msg.id, tb.hit(msg.part, dmg, { sharp: !!(w && w.sharp) }), { by: from, dir, push: Math.min(dmg / 10, 4.5) * (w ? w.knock : 1), sharp: !!(w && w.sharp) });
+    const sharp = !!(w && w.sharp), blunt = !!(w && !w.sharp);
+    if (w) this.props.bloody(held);
+    this._bodyEvents(msg.id, tb.hit(msg.part, dmg, { sharp, blunt }), { by: from, hand, dir, push: Math.min(dmg / 10, 4.5) * (w ? w.knock : 1), sharp, blunt });
   }
 
   _hostHold(from, msg) {
@@ -734,7 +739,7 @@ export class Session {
     for (const e of events) {
       if (e.type === 'hit') {
         const at = e.part === 'head' ? rig.head : e.part === 'torso' ? rig.torsoTop : (e.part.startsWith('fore') ? rig.wrist : rig.elbow)[e.part.endsWith('L') ? 0 : 1];
-        this._fx({ k: 'hit', id, part: e.part, dmg: Math.round(e.dmg), p: arr(at), d: ctx.dir ? arr(ctx.dir) : [0, 0, 0], push: r3(ctx.push || 0), by: ctx.by || 0, sharp: ctx.sharp ? 1 : 0 });
+        this._fx({ k: 'hit', id, part: e.part, dmg: Math.round(e.dmg), p: arr(at), d: ctx.dir ? arr(ctx.dir) : [0, 0, 0], push: r3(ctx.push || 0), by: ctx.by || 0, hand: ctx.hand ?? -1, sharp: ctx.sharp ? 1 : 0, blunt: ctx.blunt ? 1 : 0 });
         const bot = this.bots.get(id);
         if (bot && ctx.dir) bot.knock(ctx.dir, ctx.push || 1);
         if (this.settings.mode === 'arena') for (const [bid, b] of this.bots) if (bid !== id && bid !== ctx.by) b.cheer();     // the crowd likes that
@@ -751,23 +756,32 @@ export class Session {
         }
         this._fx({ k: 'sever', id, arm: e.arm, level: e.level, p: arr(e.level === 1 ? rig.elbow[e.arm] : A.S), ripped: ctx.ripped ? 1 : 0, by: ctx.by || 0 });
       } else if (e.type === 'behead') {
-        // the head goes flying the way it was hit
-        const v = fling().multiplyScalar(0.6);
-        if (ctx.dir) v.addScaledVector(ctx.dir, 3 + Math.min(ctx.push || 0, 4));
-        v.y += 2.5;
-        loose('gib_head', this._headAt(pose), pose.head.quat.clone().multiply(Y_FLIP), v, 1);
+        if (e.crushed) {
+          // burst by something heavy: there is no head left to fly off, only bits of it
+          this._fx({ k: 'pop', id, p: arr(rig.head), d: ctx.dir ? arr(ctx.dir) : [0, 0, 0], by: ctx.by || 0 });
+        } else {
+          // the head goes flying the way it was hit
+          const v = fling().multiplyScalar(0.6);
+          if (ctx.dir) v.addScaledVector(ctx.dir, 3 + Math.min(ctx.push || 0, 4));
+          v.y += 2.5;
+          loose('gib_head', this._headAt(pose), pose.head.quat.clone().multiply(Y_FLIP), v, 1);
+        }
         this._fx({ k: 'behead', id, p: arr(rig.torsoTop), by: ctx.by || 0 });
+      } else if (e.type === 'bisect') {
+        this._fx({ k: 'bisect', id, p: arr(rig.torsoTop.clone().lerp(rig.torsoBottom, 0.55)), d: ctx.dir ? arr(ctx.dir) : [0, 0, 0], by: ctx.by || 0 });
       } else if (e.type === 'die') {
         const body = this.body(id);
         if (ctx.blast) {
           // blown to bits: every piece goes its own way
           const out = () => fling().addScaledVector(ctx.dir || DOWN, ctx.dir ? 4 : 0);
           if (!body.headOff) loose('gib_head', this._headAt(pose), pose.head.quat.clone().multiply(Y_FLIP), out(), 1);
-          loose('gib_torso', this._torsoAt(pose, rig), rig.rootQuat.clone(), out().multiplyScalar(0.6), 7);
+          loose('gib_chest', this._pieceAt('gib_chest', pose, rig), rig.rootQuat.clone(), out().multiplyScalar(0.7), 7 | CUT);
+          loose('gib_belly', this._pieceAt('gib_belly', pose, rig), rig.rootQuat.clone(), out().multiplyScalar(0.7), CUT);
+          loose('gib_guts', this._pieceAt('gib_guts', pose, rig), rig.rootQuat.clone(), out(), 0);
           for (let a = 0; a < 2; a++) {
             const A = arm(a);
-            if (body.cut[a] === 0) loose('gib_arm', A.whole, along(A.dAll), out(), 1 | A.side);
-            else if (body.cut[a] === 1) loose('gib_upper', A.upper, along(A.d1), out(), 3 | A.side);
+            if (body.cut[a] < 2) loose('gib_upper', A.upper, along(A.d1), out(), 3 | A.side);
+            if (body.cut[a] === 0) loose('gib_fore', A.fore, along(A.d2), out(), 1 | A.side);
           }
         } else this._corpse(id, pose, rig, body, ctx, loose, arm, along);
         this._fx({ k: 'die', id, p: arr(rig.head), by: ctx.by || 0, blast: ctx.blast ? 1 : 0 });
@@ -788,9 +802,12 @@ export class Session {
     const f = gibFrame('gib_head');
     return f ? f.centre.clone().multiplyScalar(pose.scale).applyQuaternion(pose.head.quat.clone().multiply(Y_FLIP)).add(pose.head.pos) : pose.head.pos.clone();
   }
-  _torsoAt(pose, rig) {
-    const f = gibFrame('gib_torso');
-    return f ? f.centre.clone().multiplyScalar(pose.scale).applyQuaternion(rig.rootQuat).add(pose.head.pos) : rig.torsoTop.clone().lerp(rig.torsoBottom, 0.5);
+  _torsoAt(pose, rig) { return this._pieceAt('gib_torso', pose, rig); }
+  // a piece of the torso (the whole of it, either half, or what was inside)
+  _pieceAt(type, pose, rig) {
+    const f = gibFrame(type);
+    return f ? f.centre.clone().multiplyScalar(pose.scale).applyQuaternion(rig.rootQuat).add(pose.head.pos)
+      : rig.torsoTop.clone().lerp(rig.torsoBottom, type === 'gib_chest' ? 0.25 : type === 'gib_torso' ? 0.5 : 0.8);
   }
 
   // A dead body: what is left of it, jointed together at the neck, shoulders and elbows,
@@ -806,7 +823,15 @@ export class Session {
     if (flat > 4) { base.x *= 4 / flat; base.z *= 4 / flat; }          // a hard shove, not a cannon
     base.y = Math.min(Math.max(base.y, -3), 3);
     const vel = () => base.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.5));
-    const torso = loose('gib_torso', this._torsoAt(pose, rig), rig.rootQuat.clone(), vel(), (body.headOff ? 1 : 0) | (body.cut[0] === 2 ? 2 : 0) | (body.cut[1] === 2 ? 4 : 0), rag);
+    const wounds = (body.headOff ? 1 : 0) | (body.cut[0] === 2 ? 2 : 0) | (body.cut[1] === 2 ? 4 : 0);
+    let torso;
+    if (body.halved) {
+      // cut in two: the top half keeps the head and arms; the bottom half and what was inside go their own way
+      torso = loose('gib_chest', this._pieceAt('gib_chest', pose, rig), rig.rootQuat.clone(), vel().add(new THREE.Vector3(0, 1.2, 0)), wounds | CUT, rag);
+      const side = ctx.dir ? new THREE.Vector3(-ctx.dir.z, 0, ctx.dir.x) : new THREE.Vector3(1, 0, 0);
+      loose('gib_belly', this._pieceAt('gib_belly', pose, rig), rig.rootQuat.clone(), base.clone().multiplyScalar(0.4).addScaledVector(side, 0.6), CUT);
+      loose('gib_guts', this._pieceAt('gib_guts', pose, rig), rig.rootQuat.clone(), base.clone().multiplyScalar(0.6).addScaledVector(side, -0.8).add(new THREE.Vector3(0, 0.8, 0)), 0);
+    } else torso = loose('gib_torso', this._torsoAt(pose, rig), rig.rootQuat.clone(), vel(), wounds, rag);
     if (!torso) return;
     if (!body.headOff) {
       const head = loose('gib_head', this._headAt(pose), pose.head.quat.clone().multiply(Y_FLIP), vel(), 0, rag);
@@ -1055,16 +1080,24 @@ export class Session {
       p.avatar.setGhost(role === 'ghost');
     }
 
-    // 6. wounds drip
+    // 6. wounds bleed: a steady drip, and from a stump a spurt with every heartbeat
+    this._beat = (this._beat || 0) + dt;
+    const pulse = this._beat > 0.8;
+    if (pulse) this._beat = 0;
     for (const [id, rig] of this.rigs) {
       const view = this.body(id).view;
       if (view.dead || !view.bleeding) { this._drip.delete(id); continue; }
+      const out = a => this._dir.copy(stumpOf(rig, a, view.cut[a])).sub(rig.torsoTop).setY(0.15 * rig.scale).normalize();     // out from the body, and up a little
+      if (pulse) {
+        if (view.bleeding & 1 && view.cut[0]) this.onBleed(stumpOf(rig, 0, view.cut[0]), out(0), true, rig.scale);
+        if (view.bleeding & 2 && view.cut[1]) this.onBleed(stumpOf(rig, 1, view.cut[1]), out(1), true, rig.scale);
+      }
       const t = (this._drip.get(id) || 0) - dt;
       if (t > 0) { this._drip.set(id, t); continue; }
-      this._drip.set(id, (view.bleeding & 3) === 3 ? 0.05 : 0.14);
-      if (view.bleeding & 1 && view.cut[0]) this.onBleed(stumpOf(rig, 0, view.cut[0]));
-      if (view.bleeding & 2 && view.cut[1]) this.onBleed(stumpOf(rig, 1, view.cut[1]));
-      if (view.bleeding & 4) this.onBleed(rig.torsoTop);
+      this._drip.set(id, (view.bleeding & 3) === 3 ? 0.05 : 0.11);
+      if (view.bleeding & 1 && view.cut[0]) this.onBleed(stumpOf(rig, 0, view.cut[0]), null, false, rig.scale);
+      if (view.bleeding & 2 && view.cut[1]) this.onBleed(stumpOf(rig, 1, view.cut[1]), null, false, rig.scale);
+      if (view.bleeding & 4) this.onBleed(this._dir.copy(rig.torsoTop).lerp(rig.torsoBottom, Math.random() * 0.7), null, false, rig.scale);
     }
 
     // 7. network send

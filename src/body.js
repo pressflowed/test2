@@ -4,13 +4,15 @@
 //   blood 100 -> 0 means dead. Wounds bleed for a while and then clot.
 //   The head can take so much, and then it comes off (which is the end of you).
 //   Each arm can be lost at the elbow (level 1) or the shoulder (level 2).
-//   Sharp weapons go through arms and necks much more easily than fists do.
+//   Sharp weapons go through arms and necks much more easily than fists do, and enough
+//   of that to the body cuts it in two. A heavy blunt weapon does not take a head off:
+//   it bursts it.
 //   One arm gone: you bleed, it clots, you live on one-handed (with a lower blood limit).
 //   Both arms gone: the bleeding does not stop.
 
 export const BODY = {
   blood: 100,
-  hp: { upper: 45, fore: 35, head: 70 },   // damage a part takes before it comes off
+  hp: { upper: 45, fore: 35, head: 70, torso: 90 },   // damage a part takes before it comes off (the torso: before a blade goes right through)
   sharp: { arm: 1.8, head: 1.5, torso: 1.5 },   // how much worse a blade is than a fist, per part
   armBloodCost: 15,                  // each lost arm lowers how much blood you can get back to
   severLoss: 10,                     // blood lost at once when an arm comes off
@@ -29,8 +31,11 @@ export class Body {
 
   reset() {
     this.blood = BODY.blood;
-    this.hp = { upperL: BODY.hp.upper, foreL: BODY.hp.fore, upperR: BODY.hp.upper, foreR: BODY.hp.fore, head: BODY.hp.head };
-    this.headOff = false;
+    this.hp = { upperL: BODY.hp.upper, foreL: BODY.hp.fore, upperR: BODY.hp.upper, foreR: BODY.hp.fore, head: BODY.hp.head, torso: BODY.hp.torso };
+    this.headOff = false;         // the head is gone...
+    this.crushed = false;         // ...because it was burst, not knocked off
+    this.halved = false;          // cut in two at the waist
+    this.gen = (this.gen || 0) + 1;   // goes up every time the body is made whole again (so old bloodstains can be wiped)
     this.cut = [0, 0];            // per arm: 0 whole, 1 gone below the elbow, 2 gone at the shoulder
     this.bleeds = [];             // { rate, left, src } where src is an arm index, 'both' or 'body'
     this.dead = false;
@@ -57,18 +62,26 @@ export class Body {
 
   /**
    * Take a hit on a part: 'head', 'torso', 'upperL', 'foreL', 'upperR' or 'foreR'.
-   * `sharp` is for blades: they cut where a fist only bruises.
-   * Returns what happened: [{ type: 'hit', part, dmg }, { type: 'sever', arm, level, was }, { type: 'behead' }, { type: 'die' }].
+   * `sharp` is for blades: they cut where a fist only bruises. `blunt` is for clubs and hammers.
+   * Returns what happened: [{ type: 'hit', part, dmg }, { type: 'sever', arm, level, was },
+   * { type: 'behead', crushed }, { type: 'bisect' }, { type: 'die' }].
    */
-  hit(part, dmg, { sharp = false } = {}) {
+  hit(part, dmg, { sharp = false, blunt = false } = {}) {
     if (this.dead || !(dmg > 0)) return [];
     const ev = [{ type: 'hit', part, dmg }];
     this.calm = 0;
     if (part === 'head') {
       this.blood -= dmg * 1.1; this.bleeds.push({ rate: dmg * 0.08, left: 4, src: 'body' });
       this.hp.head -= dmg * (sharp ? BODY.sharp.head : 1);
-      if (this.hp.head <= 0) { ev.push(...this.behead()); return ev; }
-    } else if (part === 'torso') { this.blood -= dmg * 0.6 * (sharp ? BODY.sharp.torso : 1); this.bleeds.push({ rate: dmg * 0.04, left: 4, src: 'body' }); }
+      if (this.hp.head <= 0) { ev.push(...this.behead(blunt)); return ev; }
+    } else if (part === 'torso') {
+      this.blood -= dmg * 0.6 * (sharp ? BODY.sharp.torso : 1); this.bleeds.push({ rate: dmg * 0.04, left: 4, src: 'body' });
+      if (sharp) {
+        // a blade that goes deep enough, or that lands the killing blow hard, goes right through
+        this.hp.torso -= dmg * BODY.sharp.torso;
+        if (this.hp.torso <= 0 || (this.blood <= 0 && dmg >= 25)) { ev.push(...this.bisect()); return ev; }
+      }
+    }
     else if (part in this.hp) {
       const arm = part.endsWith('L') ? 0 : 1, level = part.startsWith('fore') ? 1 : 2;
       if (this.cut[arm] >= level) return [];              // that piece is already gone
@@ -80,11 +93,18 @@ export class Body {
     return ev;
   }
 
-  /** The head comes off. Nobody survives that. */
-  behead() {
+  /** The head comes off, or (crushed) bursts. Nobody survives that. */
+  behead(crushed = false) {
     if (this.dead) return [];
-    this.headOff = true;
-    return [{ type: 'behead' }, ...this._die()];
+    this.headOff = true; this.crushed = crushed;
+    return [{ type: 'behead', crushed }, ...this._die()];
+  }
+
+  /** Cut in two at the waist. */
+  bisect() {
+    if (this.dead) return [];
+    this.halved = true;
+    return [{ type: 'bisect' }, ...this._die()];
   }
 
   /** Take an arm off at the elbow (1) or shoulder (2). */
@@ -133,17 +153,17 @@ export class Body {
   }
 
   // ---- sending it to other players
-  pack() { return [Math.round(this.blood), this.cut[0], this.cut[1], this.dead ? 1 : 0, this.held[0] || 0, this.held[1] || 0, this.bleeding, this.stripped]; }
+  pack() { return [Math.round(this.blood), this.cut[0], this.cut[1], this.dead ? 1 : 0, this.held[0] || 0, this.held[1] || 0, this.bleeding, this.stripped, this.gen]; }
   /** Joined players: take the host's word for it. Returns true if anything visible changed. */
   apply(a) {
     const changed = this.cut[0] !== a[1] || this.cut[1] !== a[2] || this.dead !== !!a[3] || this._strip !== a[7];
     this.blood = a[0]; this.cut[0] = a[1]; this.cut[1] = a[2]; this.dead = !!a[3];
     this.held[0] = a[4] || null; this.held[1] = a[5] || null;
-    this._bleed = a[6]; this._strip = a[7];
+    this._bleed = a[6]; this._strip = a[7]; this._gen = a[8];
     return changed;
   }
   /** What to draw: works on the host (real state) and for joined players (what the host sent). */
   get view() {
-    return { cut: this.cut, dead: this.dead, bleeding: this._bleed ?? this.bleeding, stripped: this._strip ?? this.stripped, blood: this.blood };
+    return { cut: this.cut, dead: this.dead, bleeding: this._bleed ?? this.bleeding, stripped: this._strip ?? this.stripped, blood: this.blood, gen: this._gen ?? this.gen };
   }
 }

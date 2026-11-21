@@ -7,7 +7,7 @@ import { Locomotion } from './locomotion.js';
 import { Avatar, SKIN, fingertip } from './avatar.js';
 import { DesktopInput } from './input-desktop.js';
 import { VRInput } from './input-vr.js';
-import { initAudio, tap, boom, boing, crunch, jingle, thump, heartbeat, smack, tear } from './audio.js';
+import { initAudio, tap, boom, boing, crunch, jingle, thump, heartbeat, smack, tear, squelch, crack } from './audio.js';
 import { Voice } from './voice.js';
 import { buildScenery, lightButton } from './sandbox.js';
 import { SPAWNABLE, propVisual, propSize, BLAST_RADIUS, weaponHold } from './props.js';
@@ -18,7 +18,7 @@ import { Net } from './net.js';
 import { Session, GRAVITY, GRAVITY_LABEL } from './session.js';
 import { ArmMenu, SIZES, POWERS } from './armmenu.js';
 import { Sky, SKIES } from './sky.js';
-import { BlobShadows, Blasts, Debris, Blood } from './fx.js';
+import { BlobShadows, Blasts, Debris, Blood, MEAT } from './fx.js';
 import { setBodyTemplate } from './gibs.js';
 import { BODY } from './body.js';
 import { RIG, hitPart, grabArm } from './bodyrig.js';
@@ -127,8 +127,12 @@ const tipHist = [[], []];        // recent positions of each held weapon's busin
 const wTouch = [null, null];     // whose body each weapon is inside right now
 const holds = {};                // how each kind of weapon sits in a fist
 // when I die I drift up and back out of my body, to watch it fall
-const death = { at: new THREE.Vector3(), lift: new THREE.Vector3(), t: 0, headless: false };
-let woundT = 0;
+const death = { at: new THREE.Vector3(), lift: new THREE.Vector3(), t: 0, headless: false, halved: false };
+let woundT = 0, heartT = 0;
+let jumps = 0;                   // how many times the movement code has teleported or turned me (see below)
+let calmUntil = 0;               // no punch or swing counts until this time (ms): I have just been moved
+// what blood and bits land on: the ground, and the walls and ceilings of the block world
+const bloodWorld = { grid: VOXEL, groundAt: (x, y, z) => Math.max(0, voxels.groundBelow(x, y, z)), solidAt: (x, y, z) => voxels.solidAt(x, y, z) };
 const MODES = ['sandbox', 'hideseek', 'arena'];
 // How much damage a punch does to someone my own size: harder with speed, much harder if I am big.
 const punchPower = (v, s) => Math.min(Math.max((v - 1.5) * 9, 6), 60) * s ** 1.5;
@@ -289,26 +293,50 @@ session.onThump = (pos, strength) => {
 };
 session.onSettings = s => { sky.set(s.sky); applyView(); };
 // bodies: blood, noise and feeling it when it happens to me
-session.onBleed = pos => blood.spray(pos, null, 2, 0.7, 0.016);
+// The body a player or bot is drawn with (mine included), or null.
+const avatarOf = id => (id === session.myId ? avatar : session.players.get(id)?.avatar) || null;
+// a stump spurts with every heartbeat; other wounds drip
+session.onBleed = (pos, dir, spurt, sc = 1) => {
+  if (spurt) blood.spray(pos, dir, 16, 2.8 * Math.sqrt(sc), 0.02 * sc, 0.3);
+  else blood.spray(pos, null, 2, 0.7, 0.016 * sc);
+};
 session.onBodyFx = e => {
   if (!e.p) return;
   const mine = e.id === session.myId, by = e.by === session.myId;
   const p = new THREE.Vector3().fromArray(e.p);
-  const vol = Math.min(1, 4 / (p.distanceTo(loco.head) + 2));
-  const sc = session.poses.get(e.id)?.scale || 1;
+  const far = p.distanceTo(loco.head), vol = Math.min(1, 4 / (far + 2));
+  const sc = session.poses.get(e.id)?.scale || 1, rt = Math.sqrt(sc);
+  const dir = e.d ? new THREE.Vector3().fromArray(e.d) : new THREE.Vector3();
+  const close = far < 1.7 * Math.max(sc, loco.scale);       // near enough to get it on me
+  const victim = avatarOf(e.id), skin = session.colorOf(e.id);
   const red = '#ff5a4a';
   if (e.k === 'hit') {
-    const dir = new THREE.Vector3().fromArray(e.d), hard = Math.min(e.dmg, 45) / 45;
-    blood.spray(p, dir, 4 + Math.round(hard * 12), 2.4 * Math.sqrt(sc), 0.019 * sc);
-    smack(vol * (0.45 + 0.55 * hard));
+    const hard = Math.min(e.dmg, 45) / 45;
+    // blood flies on past the blow, some comes back at whoever dealt it, and a hard one knocks bits off
+    blood.spray(p, dir, 12 + Math.round(hard * 42), 3.2 * rt, 0.019 * sc);
+    blood.spray(p, dir.clone().negate().setY(0.4), 3 + Math.round(hard * 10), 1.7 * rt, 0.017 * sc);
+    if (hard > 0.35) blood.chunks(p, dir, Math.round(hard * (e.sharp ? 6 : 3)), 2.6 * rt, [MEAT.red, MEAT.dark], 0.02 * sc);
+    (e.sharp ? squelch : smack)(vol * (0.45 + 0.55 * hard));
+    // it shows on them where it landed, and on the fist that landed it
+    if (victim) {
+      const at = p.clone().addScaledVector(dir, -0.1 * sc);
+      at.x += (Math.random() - 0.5) * 0.14 * sc; at.z += (Math.random() - 0.5) * 0.14 * sc; at.y += (e.part === 'torso' ? -Math.random() * 0.3 : (Math.random() - 0.5) * 0.1) * sc;
+      victim.stain(e.part, at, (0.13 + 0.12 * hard) * sc, 0.55 + 0.4 * hard);
+    }
+    const hitter = avatarOf(e.by), fist = e.hand >= 0 ? session.poses.get(e.by)?.hands[e.hand] : null;
+    if (hitter && fist) hitter.stain(e.hand ? 'foreR' : 'foreL', fist.pos, 0.17 * (session.poses.get(e.by).scale || 1), 0.3 + 0.4 * hard);
     if (mine) {
       hud.hurt(0.35 + 0.6 * hard);
+      hud.splatter(1 + Math.round(hard * 3));
       loco.vel.addScaledVector(dir, e.push); loco.vel.y += e.push * 0.4;       // knocked back
       for (let i = 0; i < 2; i++) vr.pulse(i, 0.5 + 0.5 * hard, 120);
-    }
+    } else if (close && hard > 0.45) hud.splatter(1);
   } else if (e.k === 'sever') {
-    blood.spray(p, null, 36, 3 * Math.sqrt(sc), 0.021 * sc);
-    tear(vol);
+    blood.spray(p, null, 95, 3.4 * rt, 0.021 * sc);
+    blood.chunks(p, null, 8, 2.6 * rt, [MEAT.red, MEAT.dark, MEAT.bone, skin], 0.022 * sc);
+    tear(vol); crack(vol * 0.8);
+    if (victim) { victim.stain('torso', p, 0.2 * sc, 0.8); victim.stain(e.arm ? 'upperR' : 'upperL', p, 0.3 * sc, 0.7); }
+    if (close) hud.splatter(mine ? 4 : 2);
     if (mine) {
       const other = session.body().cut[e.arm ? 0 : 1] > 0;
       hud.hurt(1);
@@ -317,13 +345,35 @@ session.onBodyFx = e => {
     } else if (by) for (let i = 0; i < 2; i++) vr.pulse(i, 0.9, 150);
   } else if (e.k === 'behead') {
     // the neck fountains
-    blood.spray(p, UP, 50, 4.2 * Math.sqrt(sc), 0.022 * sc);
-    tear(vol);
+    blood.spray(p, UP, 140, 4.6 * rt, 0.022 * sc, 0.45);
+    blood.chunks(p, UP, 7, 3 * rt, [MEAT.red, MEAT.dark, MEAT.bone], 0.022 * sc);
+    tear(vol); crack(vol);
+    if (close) hud.splatter(3);
     if (mine) death.headless = true;
     else if (by) for (let i = 0; i < 2; i++) vr.pulse(i, 1, 200);
+  } else if (e.k === 'pop') {
+    // a head burst by something heavy: skull, brains and a red mist
+    blood.spray(p, null, 170, 4.6 * rt, 0.022 * sc);
+    blood.spray(p, dir, 60, 5.5 * rt, 0.02 * sc, 0.5);
+    blood.chunks(p, dir, 30, 4 * rt, [MEAT.pink, MEAT.pink, MEAT.bone, MEAT.bone, MEAT.red, skin], 0.03 * sc);
+    squelch(vol); crack(vol);
+    if (close) hud.splatter(5);
+  } else if (e.k === 'bisect') {
+    // cut in two: everything that was inside comes out
+    blood.spray(p, null, 190, 4 * rt, 0.022 * sc);
+    blood.spray(p, dir, 50, 4.5 * rt, 0.02 * sc, 0.6);
+    blood.chunks(p, dir, 18, 3 * rt, [MEAT.red, MEAT.dark, MEAT.pink, MEAT.pink, MEAT.bone], 0.03 * sc);
+    squelch(vol); tear(vol * 0.8);
+    if (close) hud.splatter(mine ? 6 : 4);
+    if (mine) death.halved = true;
   } else if (e.k === 'die') {
-    blood.spray(p, null, e.blast ? 90 : 30, (e.blast ? 4.5 : 2.6) * Math.sqrt(sc), 0.025 * sc);
-    if (e.blast) tear(vol * 0.7);
+    blood.spray(p, null, e.blast ? 240 : 60, (e.blast ? 5 : 2.8) * rt, 0.024 * sc);
+    if (e.blast) {
+      // blown to bits
+      blood.chunks(p, null, 44, 5 * rt, [MEAT.red, MEAT.dark, MEAT.pink, MEAT.bone, skin, skin], 0.034 * sc);
+      tear(vol * 0.7); squelch(vol);
+      if (close) hud.splatter(6);
+    }
     smack(vol);
     if (!mine && (by || !session.isBot(e.id))) hud.flash(by ? `You killed ${session.nameOf(e.id)}` : `${session.nameOf(e.id)} died`, '', 2.5);
   } else if (e.k === 'grab' && mine) {
@@ -584,8 +634,8 @@ function fight(now) {
       if (last && last.p.distanceTo(pt) > 2 * s) hist.length = 0;   // teleported
       hist.push({ p: pt.clone(), t: now });
       while (hist.length > 5) hist.shift();
-      const v = hist.length > 1 ? hist[hist.length - 1].p.distanceTo(hist[0].p) / Math.max((hist[hist.length - 1].t - hist[0].t) / 1000, 1e-3) / s : 0;
-      if (on && wTouch[i] !== on && now - lastHit[i] > 250 && v > SWING.min) {
+      const v = velocityOf(hist).length() / s;
+      if (on && wTouch[i] !== on && now - lastHit[i] > 250 && now > calmUntil && v > SWING.min) {
         lastHit[i] = now;
         session.hit(on, part, swingPower(w, v, s), i, wp.id);
         vr.pulse(i, 1, 120);
@@ -600,7 +650,7 @@ function fight(now) {
       if (part) { on = id; break; }
     }
     // only the moment the hand arrives counts, so resting a hand on someone does nothing
-    if (on && touching[i] !== on && now - lastHit[i] > FIGHT.cooldown && session.held[i] == null && !armHold[i] && !(i === 1 && carry)) {
+    if (on && touching[i] !== on && now - lastHit[i] > FIGHT.cooldown && now > calmUntil && session.held[i] == null && !armHold[i] && !(i === 1 && carry)) {
       const v = handVelocity(i).length() / s;
       if (v > FIGHT.speed && v < 30) {      // faster than any arm: that was a teleport, not a punch
         lastHit[i] = now;
@@ -741,12 +791,16 @@ let last = performance.now(), boardT = 0, gameTime = 0;
 session.loadMap('sandbox');
 applyView();
 
-function handVelocity(i) {
-  const h = handHist[i];
-  if (h.length < 2) return new THREE.Vector3();
-  const a = h[0], b = h[h.length - 1];
-  return b.p.clone().sub(a.p).divideScalar(Math.max((b.t - a.t) / 1000, 1e-3));
+// How fast something has been moving, from its last few positions [{ p, t (ms) }]. Frames
+// can arrive almost on top of each other (after a hitch, say), and a small move over next
+// to no time would look like a tremendous speed: so too short a history counts as still.
+const MIN_SPAN = 0.025;
+function velocityOf(hist) {
+  if (hist.length < 2) return new THREE.Vector3();
+  const a = hist[0], b = hist[hist.length - 1], span = (b.t - a.t) / 1000;
+  return span < MIN_SPAN ? new THREE.Vector3() : b.p.clone().sub(a.p).divideScalar(span);
 }
+function handVelocity(i) { return velocityOf(handHist[i]); }
 
 renderer.setAnimationLoop((time, frame) => {
   const now = performance.now();
@@ -769,7 +823,8 @@ renderer.setAnimationLoop((time, frame) => {
   if (dead !== wasDead) {
     wasDead = dead;
     if (dead) {
-      hud.flash(death.headless ? 'You lost your head' : 'You died', `Back in ${BODY.respawn} seconds`, BODY.respawn, '#ff5a4a');
+      hud.flash(death.halved ? 'You were cut in half' : death.headless ? 'You lost your head' : 'You died', `Back in ${BODY.respawn} seconds`, BODY.respawn, '#ff5a4a');
+      hud.splatter(5);
       if (carry) { scene.remove(carry.mesh); carry = null; }
       for (let i = 0; i < 2; i++) vr.pulse(i, 1, 500);
       jingle([262, 196, 131]);
@@ -779,7 +834,7 @@ renderer.setAnimationLoop((time, frame) => {
       death.at.copy(loco.origin); death.t = 0;
       death.lift.copy(back.normalize()).multiplyScalar(1.3 * loco.scale).setY(0.75 * loco.scale);
     } else {
-      death.headless = false;
+      death.headless = death.halved = false;
       respawn();
       hud.flash('Back in one piece', '', 2.5, '#9be15d');
     }
@@ -889,6 +944,10 @@ renderer.setAnimationLoop((time, frame) => {
   rig.updateMatrixWorld();
   if (!inVR) { camera.position.copy(desktop.headLocal); camera.quaternion.copy(desktop.headQuat); }
 
+  // A teleport, a snap turn or a change of size moves the hands without their being swung:
+  // forget where they were, so that it never counts as a punch or a swing of a weapon.
+  if (loco.jumps !== jumps) { jumps = loco.jumps; calmUntil = now + 250; for (let i = 0; i < 2; i++) { handHist[i].length = 0; tipHist[i].length = 0; } }
+
   // my pose in world space
   const s = loco.scale;
   rigQuat.setFromAxisAngle(UP, loco.yaw);
@@ -979,6 +1038,7 @@ renderer.setAnimationLoop((time, frame) => {
       if (act.grab[i] && !latch[i] && !busy && !armHold[i] && session.held[i] == null && session.grab(i, hp, s)) {
         stuck[i] = !!heldWeapon(i);
         lastSqueeze[i] = 0;
+        if (stuck[i]) { calmUntil = now + 300; tipHist[i].length = 0; }      // taking hold of a weapon is not a swing of it
         if (inVR) vr.pulse(i, stuck[i] ? 0.9 : 0.5, stuck[i] ? 90 : 50);
         if (stuck[i] && weaponTips-- > 0) hud.flash(heldWeapon(i).type.label, inVR ? 'It stays in your hand. Squeeze grip twice quickly to drop it' : 'It stays in your hand. Press G again to drop it', 4);
       }
@@ -1030,20 +1090,43 @@ renderer.setAnimationLoop((time, frame) => {
   shadows.update(casters, world.colliders, voxels);
   blasts.update(dt);
   debris.update(dt);
-  // fresh wounds on the pieces of the dead go on bleeding for a few seconds
+  // The dead go on bleeding: necks and stumps spurt for a while, a body lies in a pool that
+  // spreads, and one that is dragged leaves a smear behind it.
   woundT -= dt;
   if (woundT <= 0) {
-    woundT = 0.09;
+    woundT = 0.08;
+    heartT = (heartT + 0.08) % 0.72;
+    const beat = heartT < 0.16;
     for (const p of session.props.props.values()) {
-      if (!p.type.gib || !(p.wounds & 7) || p.age > 5) continue;
-      gibWounds(p.type.id, p.wounds, p.size).forEach((w, k) => {
-        const neck = p.type.id === 'gib_torso' && k === 0 && p.wounds & 1;        // a neck spurts; the rest drip
-        blood.spray(w.applyQuaternion(p.mesh.quaternion).add(p.mesh.position), neck ? tmpV.set(0, 1, 0).applyQuaternion(p.mesh.quaternion) : null,
-          neck ? 2 : 1, (neck ? 2.6 : 0.8) * Math.max(0.2, 1 - p.age / 5), 0.017 * p.size);
+      if (!p.type.gib) continue;
+      const at = p.mesh.position, id = p.type.id, body = id === 'gib_torso' || id === 'gib_chest' || id === 'gib_belly';
+      if ((body || (id === 'gib_head' && p.wounds & 1)) && p.age > 0.5 && p.age < 50) {
+        const ground = bloodWorld.groundAt(at.x, at.y + 0.2, at.z), low = at.y - ground < 0.32 * p.size;
+        const moved = p.was ? Math.hypot(at.x - p.was.x, at.y - p.was.y, at.z - p.was.z) : 1;
+        p.was = (p.was || new THREE.Vector3()).copy(at);
+        if (low && moved < 0.02) {
+          // lying still: a pool spreads under it (again, if it has been moved somewhere new)
+          if ((p.pools || 0) < 3 && (!p.pool || Math.hypot(at.x - p.pool.x, at.z - p.pool.z) > 0.9)) {
+            blood.pool(at, ground, (body ? 0.6 : 0.28) * p.size, 9);
+            p.pool = { x: at.x, z: at.z }; p.pools = (p.pools || 0) + 1;
+          }
+        } else if (low && (!p.smear || Math.hypot(at.x - p.smear.x, at.z - p.smear.z) > 0.25)) {
+          // sliding or being dragged along the ground: it leaves a smear
+          blood.splat(at.x + (Math.random() - 0.5) * 0.1, ground + 0.013 + Math.random() * 0.004, at.z + (Math.random() - 0.5) * 0.1, (0.09 + Math.random() * 0.08) * p.size);
+          p.smear = { x: at.x, z: at.z };
+        }
+      }
+      if (!(p.wounds & 23) || p.age > 10) continue;
+      const fade = Math.max(0.15, 1 - p.age / 10);
+      gibWounds(id, p.wounds, p.size).forEach((w, k) => {
+        const spout = (id === 'gib_torso' || id === 'gib_chest') && k === 0 && p.wounds & 1;        // a neck spurts; the rest drip
+        w.applyQuaternion(p.mesh.quaternion).add(at);
+        if (spout && beat) blood.spray(w, tmpV.set(0, 1, 0).applyQuaternion(p.mesh.quaternion), 8, 3.4 * fade, 0.018 * p.size, 0.3);
+        else if (!spout || !beat) blood.spray(w, null, 1, 0.8 * fade, 0.016 * p.size);
       });
     }
   }
-  blood.update(dt, GRAVITY[session.settings.gravity], (x, y, z) => Math.max(0, voxels.groundBelow(x, y, z)));
+  blood.update(dt, GRAVITY[session.settings.gravity], bloodWorld);
   level.update(dt);
   // redraw chunks whose blocks changed: nearest first, one or two per frame (everything after a map change)
   voxelView.update(voxelView.dirty.size > 24 ? 999 : inVR ? 1 : 2, loco.head);

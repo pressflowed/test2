@@ -7,7 +7,7 @@ import * as CANNON from 'cannon-es';
 import { sdBox, near, pushOut } from './physics.js';
 import { texture } from './textures.js';
 import { makeGib, LOOSE } from './gibs.js';
-import { WEAPONS, weaponVisual, weaponHold } from './weapons.js';
+import { WEAPONS, weaponVisual, weaponHold, MAX_BLOOD } from './weapons.js';
 
 // size: box [x, y, z]; sphere r; cylinder r, h (rTop for cones and pins)
 // climb:  players' hands and bodies collide with it (you can stand on it). Otherwise
@@ -48,11 +48,14 @@ export const PROP_TYPES = [
   { id: 'gib_arm', label: 'Arm', shape: 'box', size: [0.12, 0.64, 0.12], mass: 4, color: 0xe0ac86, gib: true },
   { id: 'gib_fore', label: 'Forearm', shape: 'box', size: [0.1, 0.36, 0.1], mass: 2, color: 0xe0ac86, gib: true },
   { id: 'gib_upper', label: 'Upper arm', shape: 'box', size: [0.12, 0.3, 0.12], mass: 2, color: 0xe0ac86, gib: true },
+  { id: 'gib_chest', label: 'Chest', shape: 'box', size: [0.46, 0.34, 0.22], mass: 15, color: 0xe0ac86, gib: true },
+  { id: 'gib_belly', label: 'Belly', shape: 'box', size: [0.34, 0.26, 0.2], mass: 10, color: 0xe0ac86, gib: true },
+  { id: 'gib_guts', label: 'Guts', shape: 'sphere', r: 0.085, mass: 1.5, color: 0xd08080, gib: true },
 ];
 /** What the spawn menu offers. */
 export const SPAWNABLE = PROP_TYPES.filter(t => !t.gib);
-export const GIB_LIFE = 45;   // seconds a body piece lies around
-export const MAX_GIBS = 40;   // more than this and the oldest goes (a whole body at a time)
+export const GIB_LIFE = 80;   // seconds a body piece lies around
+export const MAX_GIBS = 56;   // more than this and the oldest goes (a whole body at a time)
 export const TYPE = Object.fromEntries(PROP_TYPES.map(t => [t.id, t]));
 
 export const MAX_PROPS = 90;
@@ -186,7 +189,7 @@ export class PropWorld {
     const { geo, mat } = propVisual(t.id);
     if (t.gib && wounds == null) wounds = LOOSE[t.id] || 0;
     const gib = t.gib ? makeGib(t.id, color || t.color, wounds) : null;       // a real body piece, in its owner's skin colour
-    const mesh = gib || new THREE.Mesh(geo, t.fuse ? mat.clone() : mat);
+    const mesh = gib || new THREE.Mesh(t.weapon && wounds ? weaponVisual(t.id, wounds).geo : geo, t.fuse ? mat.clone() : mat);
     mesh.position.copy(pos);
     if (quat) mesh.quaternion.copy(quat);
     if (t.weapon && owner !== 'rack') mesh.quaternion.multiply(_q.setFromAxisAngle(_n.set(0, 0, 1), 1.35));   // weapons come out lying down, not balanced on end
@@ -239,6 +242,13 @@ export class PropWorld {
       this.world.removeConstraint(j.c);
       return false;
     });
+  }
+
+  /** A weapon has been used on someone: it gets bloodier (up to a point). */
+  bloody(p) { if (p && p.type.weapon && p.wounds < MAX_BLOOD) this._stain(p, p.wounds + 1); }
+  _stain(p, level) {
+    p.wounds = level;
+    p.mesh.geometry = weaponVisual(p.type.id, level).geo;
   }
 
   /** Remove every piece of one dead body. */
@@ -557,6 +567,7 @@ export class PropWorld {
       const pos = new THREE.Vector3(x, y, z), quat = new THREE.Quaternion(qx, qy, qz, qw);
       if (!p) p = this.spawn(PROP_TYPES[ti].id, pos, quat, { id, owner: owner || null, color: color || 0, scale: size || 1, wounds: wounds || 0 });
       p.target.pos.copy(pos); p.target.quat.copy(quat);
+      if (p.type.weapon && p.wounds !== (wounds || 0)) this._stain(p, wounds || 0);
       p.heldKey = heldKey || null;
       p.fuse = fuse || 0;
     }
