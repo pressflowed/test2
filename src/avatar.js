@@ -8,6 +8,7 @@
 // leaves a red stump with the bone end showing, and a dead body is not drawn at all
 // (it is lying around as props instead).
 import * as THREE from 'three';
+import { SLOTS, wornArmour } from './armour.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { RIG } from './bodyrig.js';
@@ -84,6 +85,7 @@ export class Avatar {
     // root: follows the head position and turns with the view (yaw only). Holds the torso.
     this.root = new THREE.Group();
     scene.add(this.root);
+    this.armour = [null, null];       // the helmet and chest plate meshes, once worn (see setBody)
     this.torso = mesh.Torso; this.torsoCap = mesh.Torso_cap;
     this.root.add(this.torso, this.torsoCap);
     // head: turns freely with the headset
@@ -235,11 +237,18 @@ export class Avatar {
     const cut = view ? view.cut : [0, 0], dead = !!(view && view.dead), strip = view ? view.stripped : 0;
     // made whole again since last time: the blood is gone too
     if (view && view.gen !== this._gen) { this._gen = view.gen; this.clean(); }
-    const key = `${cut[0]}${cut[1]}${dead ? 1 : 0}${strip}${this._first ? 1 : 0}`;
+    const worn = view && view.armour ? view.armour : [0, 0];
+    const key = `${cut[0]}${cut[1]}${dead ? 1 : 0}${strip}${this._first ? 1 : 0}${worn[0] > 0 ? 1 : 0}${worn[1] > 0 ? 1 : 0}`;
     this._view = view;
     if (key === this._look) return;
     this._look = key;
     this.root.visible = !dead;
+    // armour is only made for those who wear it
+    SLOTS.forEach((id, slot) => {
+      const on = worn[slot] > 0 && !dead;
+      if (on && !this.armour[slot]) (slot ? this.root : this.head).add(this.armour[slot] = wornArmour(id));
+      if (this.armour[slot]) this.armour[slot].visible = on;
+    });
     // A torn shoulder shows what is inside. The torso's inside is one piece that also closes the
     // neck, which would fill your view when you look down at yourself: your own body gets a
     // raw lump at the shoulder instead.

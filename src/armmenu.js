@@ -49,9 +49,10 @@ const LAYOUT = {
     { id: 'mode:hideseek', rect: [287, 105, 266, 150], label: 'Hide and seek' },
     { id: 'mode:arena', rect: [554, 105, 266, 150], label: 'Arena' },
     // sandbox: bots and fighting in a row of their own
-    { id: 'addbot', rect: [20, 318, 266, 126], only: 'sandbox' },
-    { id: 'clearbots', rect: [287, 318, 266, 126], only: 'sandbox' },
-    { id: 'pvp', rect: [554, 318, 266, 126], only: 'sandbox' },
+    { id: 'addbot', rect: [20, 318, 200, 126], only: 'sandbox' },
+    { id: 'addknight', rect: [220, 318, 200, 126], only: 'sandbox' },
+    { id: 'clearbots', rect: [420, 318, 200, 126], only: 'sandbox' },
+    { id: 'pvp', rect: [620, 318, 200, 126], only: 'sandbox' },
     { id: 'mic', rect: [20, 450, 300, 130], only: ['sandbox', 'hideseek'] },
     { id: 'skip', rect: [520, 450, 300, 130], only: 'hideseek' },
     // arena: everything along the bottom, under the bracket news
@@ -330,9 +331,10 @@ export class ArmMenu {
         // sandbox: dummies to beat up, and whether players can hurt each other
         g.fillStyle = C.muted; g.font = 'bold 32px sans-serif';
         g.fillText((s.game || [])[0] || '', CW / 2, 288);
-        button(B('addbot'), 'Add bot', `${s.bots || 0} of ${s.maxBots || 6}`);
-        button(B('clearbots'), 'Clear bots');
-        button(B('pvp'), 'Fighting', s.pvp ? 'On' : 'Off', !!s.pvp);
+        button(B('addbot'), 'Add bot', `${s.bots || 0} of ${s.maxBots || 6}`, false, 30);
+        button(B('addknight'), 'Armoured bot', 'With a shield', false, 30);
+        button(B('clearbots'), 'Clear bots', null, false, 30);
+        button(B('pvp'), 'Fighting', s.pvp ? 'On' : 'Off', !!s.pvp, 30);
         button(B('mic'), mic, null, mic === 'Mic on');
       }
     }

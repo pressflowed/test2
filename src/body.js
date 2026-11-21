@@ -9,6 +9,8 @@
 //   it bursts it.
 //   One arm gone: you bleed, it clots, you live on one-handed (with a lower blood limit).
 //   Both arms gone: the bleeding does not stop.
+//   Armour: a helmet covers the head and a chest plate the torso. A blow to a covered
+//   part does nothing but wear the armour down, until it is knocked off.
 
 export const BODY = {
   blood: 100,
@@ -22,6 +24,8 @@ export const BODY = {
   strip: 0.45,                       // below this share of its hp, a segment's flesh is torn off
   ripStretch: 1.3,                   // pull a held arm this many arm-lengths from its shoulder and it rips
   holdTime: 4,                       // seconds a held arm stays held if nobody rips it
+  armour: [6, 8],                    // how much a helmet and a chest plate can take...
+  wear: { fist: 1, sharp: 2, blunt: 3 },   // ...and how much each kind of blow takes off that (so a helmet stops 3 sword cuts, or 2 from a hammer)
 };
 
 export const ARM_PARTS = [['upperL', 'foreL'], ['upperR', 'foreR']];
@@ -43,6 +47,14 @@ export class Body {
     this.held = [null, null];     // per arm: "playerId:hand" of whoever has hold of it
     this.holdT = [0, 0];
     this.calm = 0;                // seconds since last hurt or bleeding
+    this.armour = [0, 0];         // what is left of the helmet and the chest plate (0: not wearing one)
+  }
+
+  /** Put on a helmet (slot 0) or a chest plate (slot 1). Returns false if one is already on. */
+  wear(slot) {
+    if (this.dead || !(slot === 0 || slot === 1) || this.armour[slot] > 0) return false;
+    this.armour[slot] = BODY.armour[slot];
+    return true;
   }
 
   get maxBlood() { return BODY.blood - BODY.armBloodCost * ((this.cut[0] ? 1 : 0) + (this.cut[1] ? 1 : 0)); }
@@ -64,10 +76,16 @@ export class Body {
    * Take a hit on a part: 'head', 'torso', 'upperL', 'foreL', 'upperR' or 'foreR'.
    * `sharp` is for blades: they cut where a fist only bruises. `blunt` is for clubs and hammers.
    * Returns what happened: [{ type: 'hit', part, dmg }, { type: 'sever', arm, level, was },
-   * { type: 'behead', crushed }, { type: 'bisect' }, { type: 'die' }].
+   * { type: 'behead', crushed }, { type: 'bisect' }, { type: 'die' }], or, if armour took it,
+   * just [{ type: 'armour', slot, left }] (left 0: that knocked it off).
    */
-  hit(part, dmg, { sharp = false, blunt = false } = {}) {
+  hit(part, dmg, { sharp = false, blunt = false, pierce = false } = {}) {
     if (this.dead || !(dmg > 0)) return [];
+    const slot = part === 'head' ? 0 : part === 'torso' ? 1 : -1;
+    if (slot >= 0 && this.armour[slot] > 0 && !pierce) {       // pierce: an explosion, which armour is no help against
+      this.armour[slot] = Math.max(0, this.armour[slot] - (blunt ? BODY.wear.blunt : sharp ? BODY.wear.sharp : BODY.wear.fist));
+      return [{ type: 'armour', slot, left: this.armour[slot], dmg }];
+    }
     const ev = [{ type: 'hit', part, dmg }];
     this.calm = 0;
     if (part === 'head') {
@@ -153,17 +171,19 @@ export class Body {
   }
 
   // ---- sending it to other players
-  pack() { return [Math.round(this.blood), this.cut[0], this.cut[1], this.dead ? 1 : 0, this.held[0] || 0, this.held[1] || 0, this.bleeding, this.stripped, this.gen]; }
+  pack() { return [Math.round(this.blood), this.cut[0], this.cut[1], this.dead ? 1 : 0, this.held[0] || 0, this.held[1] || 0, this.bleeding, this.stripped, this.gen, this.armour[0] * 16 + this.armour[1]]; }
   /** Joined players: take the host's word for it. Returns true if anything visible changed. */
   apply(a) {
-    const changed = this.cut[0] !== a[1] || this.cut[1] !== a[2] || this.dead !== !!a[3] || this._strip !== a[7];
+    const arm = a[9] || 0;
+    const changed = this.cut[0] !== a[1] || this.cut[1] !== a[2] || this.dead !== !!a[3] || this._strip !== a[7] || this.armour[0] !== arm >> 4 || this.armour[1] !== (arm & 15);
     this.blood = a[0]; this.cut[0] = a[1]; this.cut[1] = a[2]; this.dead = !!a[3];
+    this.armour[0] = arm >> 4; this.armour[1] = arm & 15;
     this.held[0] = a[4] || null; this.held[1] = a[5] || null;
     this._bleed = a[6]; this._strip = a[7]; this._gen = a[8];
     return changed;
   }
   /** What to draw: works on the host (real state) and for joined players (what the host sent). */
   get view() {
-    return { cut: this.cut, dead: this.dead, bleeding: this._bleed ?? this.bleeding, stripped: this._strip ?? this.stripped, blood: this.blood, gen: this._gen ?? this.gen };
+    return { cut: this.cut, dead: this.dead, bleeding: this._bleed ?? this.bleeding, stripped: this._strip ?? this.stripped, blood: this.blood, gen: this._gen ?? this.gen, armour: this.armour };
   }
 }

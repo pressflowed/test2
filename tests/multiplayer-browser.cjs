@@ -9,7 +9,7 @@ const http = require('http'), fs = require('fs'), path = require('path');
 const root = path.resolve(__dirname, '..');
 const out = path.resolve(process.argv[2] || path.join(root, 'tests', 'out'));
 fs.mkdirSync(out, { recursive: true });
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.glb': 'model/gltf-binary' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.glb': 'model/gltf-binary', '.jpg': 'image/jpeg' };
 const server = http.createServer((req, res) => {
   const file = path.join(root, decodeURIComponent(req.url.split('?')[0]).replace(/\/$/, '/index.html'));
   fs.readFile(file, (err, buf) => {
@@ -339,7 +339,7 @@ const until = (page, fn, arg, ms = 15000) => page.waitForFunction(fn, arg, { tim
     check(await until(a, () => game.session.role() === 'fighter' && Math.abs(game.loco.head.z) > 16.5, null, 30000), 'and so is the host');
     let ar = { a: await a.evaluate(() => ({ z: game.loco.head.z, gates: game.level.gatesOpen, bots: game.session.botCount, bracket: game.session.arena.rounds[0][0] })), b: await b.evaluate(() => ({ z: game.loco.head.z, gates: game.level.gatesOpen, racks: [...game.session.props.props.values()].filter(p => p.owner === 'rack').length, board: game.session.arena.rounds[0][0] })) };
     check(ar.a.z * ar.b.z < 0 && !ar.a.gates && !ar.b.gates && ar.a.bots === 0, `they are at opposite ends behind shut gates, with no bots needed: ${JSON.stringify(ar)}`);
-    check(ar.b.racks === 12 && ar.b.board.slice(0, 2).sort().join() === ['h', bId].sort().join(), 'the friend sees the weapons and the bracket');
+    check(ar.b.racks === 20 && ar.b.board.slice(0, 2).sort().join() === ['h', bId].sort().join(), 'the friend sees the weapons, shields and armour on the walls, and the bracket');
     // the friend takes an axe off the wall
     await b.evaluate(() => {
       const T = game.THREE, axe = [...game.session.props.props.values()].filter(p => p.type.id === 'axe').sort((p, q) => p.mesh.position.distanceTo(game.loco.head) - q.mesh.position.distanceTo(game.loco.head))[0];
@@ -356,6 +356,10 @@ const until = (page, fn, arg, ms = 15000) => page.waitForFunction(fn, arg, { tim
     await b.evaluate(() => { game.desktop.keys.KeyG = false; });
     await b.waitForTimeout(600);
     check(await b.evaluate(() => !!game.heldWeapon(1) && game.stuck[1] && game.desktop.hands[1].armed), 'and it stays in the friend\'s hand');
+    // and puts on the helmet by the door
+    await b.evaluate(() => { const helmet = [...game.session.props.props.values()].filter(p => p.type.id === 'helmet').sort((p, q) => p.mesh.position.distanceTo(game.loco.head) - q.mesh.position.distanceTo(game.loco.head))[0]; game.session.request({ t: 'wear', id: helmet.id }); });
+    check(await until(a, id => game.session.body(id).armour[0] === 6 && !!game.session.players.get(id).avatar.armour[0] && game.session.players.get(id).avatar.armour[0].visible, bId, 30000), 'the friend puts a helmet on, and the host sees it on their head');
+    check(await until(b, () => game.session.body().armour[0] === 6 && game.hud.title === 'Helmet on' && [...game.session.props.props.values()].filter(p => p.type.id === 'helmet').length === 1, null, 30000), 'the friend is told it is on, and it is gone from the wall');
     await b.screenshot({ path: path.join(out, 'mp-arena-armed.png') });
     // before the gates open nobody can be hurt
     await a.evaluate(id => game.session.hit(id, 'head', 100, 1), bId);
@@ -368,6 +372,15 @@ const until = (page, fn, arg, ms = 15000) => page.waitForFunction(fn, arg, { tim
     await a.waitForTimeout(2000);
     await b.evaluate(() => game.session.hit('h', 'foreL', 20, 1, game.axe));
     check(await until(a, () => game.session.body().cut[0] === 1 && /forearm is gone/.test(game.hud.title), null, 30000), 'the friend\'s axe takes the host\'s forearm off in one blow');
+    // a blow the host says was caught on the friend's axe: both hear about it, nobody is hurt
+    await a.evaluate(id => game.session.block(id, 1, 1, game.session.poses.get(id).hands[1].pos.clone(), 5), bId);
+    check(await until(b, () => game.hud.title === 'Blocked!' && game.session.body().blood === 100, null, 30000), 'a blow caught on the friend\'s axe: the friend is told it was blocked');
+    // the helmet takes the host's punches to the head, until it is knocked off
+    await a.evaluate(id => game.session.hit(id, 'head', 250, 1), bId);
+    check(await until(b, () => game.session.body().armour[0] === 5 && game.session.body().blood === 100 && /Helmet took that/.test(game.hud.title), null, 30000), 'the friend\'s helmet takes a punch that would have killed');
+    await a.evaluate(id => { for (let i = 0; i < 5; i++) game.session.hit(id, 'head', 40, 1); }, bId);
+    check(await until(b, () => game.session.body().armour[0] === 0 && /Helmet knocked off/.test(game.hud.title) && [...game.session.props.props.values()].some(p => p.type.id === 'helmet' && p.wounds === 1), null, 30000), 'five more knock it off, and it lies there dented');
+    check(await a.evaluate(id => !game.session.players.get(id).avatar.armour[0].visible && game.session.body(id).blood === 100, bId), 'the host sees the bare head, and still no blood');
     // the host knocks the friend's head off
     await a.evaluate(id => game.session.hit(id, 'head', 250, 1), bId);
     check(await until(b, () => game.session.body().dead && /lost your head/.test(game.hud.title), null, 30000), 'the host knocks the friend\'s head off, and the friend is told so');

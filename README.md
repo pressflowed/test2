@@ -2,7 +2,7 @@
 
 A VR tag game where you have no legs: you move by pushing off the world with your hands. It's built with WebXR and Three.js and made for Meta Quest. See [PLAN.md](PLAN.md) for the roadmap.
 
-**Current state: a breakable voxel world with three modes, solo or online: Sandbox, Hide and seek, and Arena (a knockout tournament with weapons in a colosseum). You have a real body: you can be hurt, lose arms or your head, bleed out and die, and your corpse flops to the ground as a ragdoll.**
+**Current state: a breakable voxel world with three modes, solo or online: Sandbox, Hide and seek, and Arena (a knockout tournament with weapons, shields and armour in a colosseum). You have a real body: you can be hurt, lose arms or your head, bleed out and die, and your corpse flops to the ground as a ragdoll. You can also block.**
 
 **Play:** https://pressflowed.github.io/test2/ (open it in the Meta Quest Browser and press Enter VR, or play on desktop)
 
@@ -35,8 +35,8 @@ Pick one on the start menu, or on the **Game** tab of the arm menu. Anyone in th
   - Places to hide: houses with attics, chimneys and furniture; a castle with towers and a keep; a hedge maze; a cave hill full of tunnels; a barn with hay stacks; a great hollow tree; hollow logs; bushes, boulders and crates.
 
 - **Arena:** a colosseum, and a knockout tournament of one-against-one fights that runs by itself.
-  - Everyone in the room is drawn into a bracket. If you are alone, a gladiator bot turns up to fight you; **Add bot** on the Game tab puts more in (up to 6), and they fight each other too.
-  - For each match the two fighters appear in their own rooms at opposite ends, behind shut gates, with **20 seconds to take a weapon** off the wall. Everyone else watches from the seats.
+  - Everyone in the room is drawn into a bracket. If you are alone, a gladiator bot turns up to fight you; **Add bot** on the Game tab puts more in (up to 6), and they fight each other too. Some bots come with a shield, a helmet or a chest plate.
+  - For each match the two fighters appear in their own rooms at opposite ends, behind shut gates, with **20 seconds to kit up**: six weapons and two shields hang on the side walls, and a helmet and a chest plate either side of the door. Everyone else watches from the seats.
   - Then the gates drop and they fight on the sand until one of them is dead. The winner goes through to the next round; the last one standing is the champion, and a new tournament starts.
   - You also lose if you stay off the sand for 15 seconds, or leave. If 90 seconds run out, whoever has more blood left wins.
   - Only the two fighters can hurt each other or pick anything up. Everyone is normal size, and nothing can be smashed.
@@ -73,9 +73,12 @@ In the sandbox and the arena (hide and seek has no fighting). Everyone has a bod
 - **Arms:** each arm can be punched off, at the elbow or the shoulder (a badly hurt arm shows bone first). Or **grab** it: squeeze grip on someone's arm with a slow hand, then pull. Stretch it about 1.3 arm-lengths from the shoulder and it tears off in your hand; you can throw it or hit things with it. A held arm slips free after 4 seconds.
 - **One arm gone:** you bleed for 12 seconds, then it stops. You live, but you can only push, grab and punch with the arm you have left, and you can only heal back to 85 blood.
 - **Both arms gone:** the bleeding does not stop. You have less than 10 seconds.
-- **Weapons:** sword, axe, spear, club, war hammer and dagger. In the sandbox they are on the last page of the Items tab; in the arena they hang in your room. Squeeze **grip** near one to pick it up: it jumps into your fist and **stays there**, even when you let go of grip. To drop it, squeeze grip **twice quickly**. Swing the business end into someone; faster swings hurt more. Blades (sword, axe, spear, dagger) go through arms and necks far more easily than fists; the club and hammer hit hard and knock people back.
+- **Weapons:** sword, axe, spear, club, war hammer and dagger. In the sandbox they are on the last pages of the Items tab (with the shield and the armour); in the arena they hang in your room. Squeeze **grip** near one to pick it up: it jumps into your fist and **stays there**, even when you let go of grip. To drop it, squeeze grip **twice quickly**. Swing the business end into someone; faster swings hurt more. Blades (sword, axe, spear, dagger) go through arms and necks far more easily than fists; the club and hammer hit hard and knock people back.
+- **Blocking:** a blow caught on something you are holding does nothing. Get your weapon or your shield between you and the blow (it is judged by where the two things really are, so hold it where the blow is going) and there is a **clang**, sparks, and a jolt in both hands. It works against fists too, and bots do it to you: a bot behind a shield has to be hit round it, over it (the head) or from behind.
+- **Shields:** a round shield, with the weapons. It sits on your fist and faces the way your knuckles point. It catches blows over its whole face, where a blade only catches what crosses it. You can shove it into someone, but it barely hurts.
+- **Armour:** a **helmet** and a **chest plate**. Squeeze grip on one and it is on (it does not stay in your hand). A blow to your head or body then rings off it and does nothing, but each one wears it down: a helmet stops 3 sword cuts, 2 hammer blows or 6 punches, a chest plate 4, 3 or 8. The last one **knocks it off**, and it lands on the ground dented and no use to anyone. Armour does not cover your arms, and it is no help against TNT.
 - **TNT** hurts everyone near it and can take arms off.
-- **Bots:** the **Game** tab of the arm menu has **Add bot** (up to 6) and **Clear bots**. In the sandbox they are dummies: they hop around with no plan, flinch when hit, and hop away when you grab them (which is how their arms come off). They can always be hurt. (In the arena they fight back: they come at their opponent and swing.)
+- **Bots:** the **Game** tab of the arm menu has **Add bot** (up to 6), **Armoured bot** (the same, but in a helmet and chest plate and holding a shield up, to try blocking and armour on) and **Clear bots**. In the sandbox they are dummies: they hop around with no plan, flinch when hit, and hop away when you grab them (which is how their arms come off). They can always be hurt. (In the arena they fight back: they come at their opponent and swing.)
 - **Fighting** (Game tab) switches whether *players* can hurt each other. It is on to begin with. Turn it off to build in peace; TNT then only throws you around, as before.
 - Bodies and body pieces lie around for 80 seconds. They are ordinary props: grab them, throw them.
 
@@ -90,13 +93,13 @@ In the sandbox and the arena (hide and seek has no fighting). Everyone has a bod
 - **Left hand:** trigger deletes the prop nearest that hand. **Y** takes you back to the start.
 - **Grip (either hand):** grab a prop, or someone's arm; let go to throw it. A weapon stays in your hand: squeeze grip twice quickly to let go of it.
 
-Items: crate, ball, beach ball, barrel, cone, big crate, plank, platform, trampoline, TNT (explodes after 4 seconds), balloon (floats away), launch pad (flings you up), super ball, giant ball, domino, bowling pin, dice, tire, anvil, building pieces that stay where you put them (block, wall, pillar, beam), a table, and six weapons (the last page).
+Items: crate, ball, beach ball, barrel, cone, big crate, plank, platform, trampoline, TNT (explodes after 4 seconds), balloon (floats away), launch pad (flings you up), super ball, giant ball, domino, bowling pin, dice, tire, anvil, building pieces that stay where you put them (block, wall, pillar, beam), a table, and on the last pages six weapons, a shield, a helmet and a chest plate.
 
 ### On desktop (for testing without a headset)
 - Hold **left / right click** and drag the mouse down to push with that hand. **Space** uses both hands.
 - **J** punches whoever or whatever you are looking at (with the weapon you are holding, if any). **O** goes to the next mode. **K** skips to the next round, or draws a new bracket in the arena.
-- **U** adds a bot, **I** clears the bots, **Y** takes an arm off the bot you are looking at (a mouse cannot pull), **0** switches fighting between players on or off.
-- **F** throws the selected item where you look. The wheel or **1–8** pick an item; **,** and **.** change page. **V** quick-spawns, **G** (hold) grabs with the right hand (a weapon: **G** once to pick it up, **G** again to drop it), **X** deletes near it, **Z** undoes.
+- **U** adds a bot, **9** adds an armoured one with a shield, **I** clears the bots, **Y** takes an arm off the bot you are looking at (a mouse cannot pull), **0** switches fighting between players on or off.
+- **F** throws the selected item where you look. The wheel or **1–8** pick an item; **,** and **.** change page. **V** quick-spawns, **G** (hold) grabs with the right hand (a weapon: **G** once to pick it up, **G** again to drop it; armour: **G** puts it on), **A** does the same with the left hand (for a shield), **X** deletes near it, **Z** undoes.
 - **M** shows or hides the menu, **T** switches tab, **[ ]** change size, **- =** change power, **L** gravity, **N** sky, **H** smashing on/off, **Backspace** repairs the map, **P** prop rain, **B** balloons, **C** clear.
 - The mouse looks around. **Q / E** turn, **R** resets, **Esc** pauses.
 
@@ -108,9 +111,12 @@ npm test               # movement physics tests (Node)
 node tests/smoke-browser.cjs        # loads the game in headless Chromium, runs and screenshots it
 node tests/body-browser.cjs         # bots, punches, arms and heads coming off, ragdolls, weapons, bleeding out, dying and coming back
 node tests/arena-browser.cjs        # the colosseum: a whole tournament against bots, gates, weapons, forfeits
+node tests/guard-browser.cjs        # shields, blocking and armour, in the sandbox and against an arena bot
 node tests/multiplayer-browser.cjs  # two browsers + a local PeerJS server: sync, voice (fake microphone), fighting, a full hide and seek round and an arena final
 npm run serve          # http://localhost:8000 for desktop testing
 ```
+
+To change a surface texture, pick another file on [TextureTown](https://textures.neocities.org), put its name in `CHOSEN` at the top of `tools/fetch_textures.py`, and run `python3 tools/fetch_textures.py` (it needs Pillow: `pip install pillow`). It downloads the picture, makes it 256 x 256 and seamless, and writes it to `assets/textures/`.
 
 ## Files
 
@@ -119,10 +125,11 @@ npm run serve          # http://localhost:8000 for desktop testing
 | `src/locomotion.js` | The arm-push movement. All the feel settings are in `DEFAULTS` at the top (`gripBrake` is how hard a still hand stops you). |
 | `src/voxels.js` | The breakable world: a grid of 25 cm blocks, dents, collapse, collision boxes |
 | `src/voxelmesh.js` | Draws the voxel world, one mesh per 8 m chunk, shaded under roofs |
-| `src/maps.js` | The three maps, built from blocks: the sandbox, Hollow Hamlet and the colosseum (`COLOSSEUM` says where its rooms, gates, weapon racks and seats are) |
+| `src/maps.js` | The three maps, built from blocks: the sandbox, Hollow Hamlet and the colosseum (`COLOSSEUM` says where its rooms, gates, weapon racks, shields, armour and seats are) |
 | `src/rounds.js` | Hide and seek round rules (run by the host) |
 | `src/arena.js` | The arena tournament: bracket, phases and who wins (run by the host). The times are in `ARENA` at the top |
-| `src/weapons.js` | The weapons: damage, reach, how they sit in a fist, and what they look like. All in `WEAPONS` at the top |
+| `src/weapons.js` | The weapons and the shield: damage, reach, how they sit in a fist, what they look like, and how a held one stops a blow (`guardOf`, `guardStops`). All in `WEAPONS` and `BLOCK` at the top |
+| `src/armour.js` | The helmet and the chest plate: what they look like, loose and worn. (How much they take is in `BODY` in `src/body.js`) |
 | `src/physics.js` | Collision helpers and the list of unbreakable boxes |
 | `src/avatar.js` | The body you see: head follows the headset, IK arms, how the hand sits on the controller, and how wounds and missing arms are shown |
 | `src/body.js` | The rules for a body: blood, bleeding, arms and heads coming off, dying and coming back. All the numbers are in `BODY` at the top |
@@ -135,7 +142,8 @@ npm run serve          # http://localhost:8000 for desktop testing
 | `src/net.js` | PeerJS host / join with room codes |
 | `src/voice.js` | Voice chat: one audio call per pair of players, volume and side by distance |
 | `src/armmenu.js` | The arm menu: tabs, buttons you poke, item previews you grab |
-| `src/textures.js` | All textures, painted on canvases at startup (no image files) |
+| `src/textures.js` | Textures: loads the surface photos in `assets/textures/` (grass, stone, wood...), and paints the ones with a design of their own (dice, TNT, beach ball...) on canvases |
+| `assets/textures/` | The surface photos, from TextureTown. Chosen, resized and made to tile by `tools/fetch_textures.py`; `CREDITS.md` there says which file each one came from |
 | `src/sky.js` | Sky dome, sun, clouds, stars; day, sunset and night |
 | `src/fx.js` | Blob shadows, explosion flashes, rubble, and blood: droplets, marks on floors and walls, pools, and chunks of meat |
 | `src/sandbox.js` | What cannot be broken: the lawn, the border walls, the sandbox control panel and board, the arena's gates and bracket boards |
@@ -147,3 +155,4 @@ npm run serve          # http://localhost:8000 for desktop testing
 ## Credits
 
 - Body model: ["Proportional Low Poly Man"](https://sketchfab.com/3d-models/proportional-low-poly-man-free-download-0bfd0e2b49a348a4b64b20cc8196e3b3) by [Robin Butler](https://sketchfab.com/StarTrekGuy), licensed under [CC BY 4.0](http://creativecommons.org/licenses/by/4.0/). Changed for this game: the legs were removed and the body was cut into separate head, torso, arm and hand pieces.
+- Surface textures (grass, stone, brick, wood, sand and so on): from [TextureTown](https://textures.neocities.org) by Melon, a free library of textures for websites and 3D worlds. Resized to 256 x 256, and some recoloured or blended at the edges so they tile. `assets/textures/CREDITS.md` lists the original file for each.

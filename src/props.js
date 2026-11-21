@@ -8,6 +8,7 @@ import { sdBox, near, pushOut } from './physics.js';
 import { texture } from './textures.js';
 import { makeGib, LOOSE } from './gibs.js';
 import { WEAPONS, weaponVisual, weaponHold, MAX_BLOOD } from './weapons.js';
+import { ARMOUR, armourVisual } from './armour.js';
 
 // size: box [x, y, z]; sphere r; cylinder r, h (rTop for cones and pins)
 // climb:  players' hands and bodies collide with it (you can stand on it). Otherwise
@@ -42,6 +43,8 @@ export const PROP_TYPES = [
   { id: 'table', label: 'Table', shape: 'box', size: [1.6, 0.75, 0.9], mass: 30, color: 0x9a6a3c, climb: true },
   // weapons: swing the business end into somebody (see weapons.js)
   ...Object.entries(WEAPONS).map(([id, w]) => ({ id, label: w.label, shape: 'box', size: w.size, mass: w.mass, color: 0xcfd6dc, weapon: w })),
+  // armour: pick a piece up and it is on (see armour.js). A dented one (wounds: 1) is just scrap.
+  ...Object.entries(ARMOUR).map(([id, a]) => ({ id, label: a.label, shape: 'box', size: a.size, mass: a.mass, color: 0xcfd6dc, armour: a })),
   // body pieces: not in the spawn menu; they appear when someone loses a limb or dies, and fade after a while
   { id: 'gib_head', label: 'Head', shape: 'sphere', r: 0.11, mass: 4, color: 0xe0ac86, bounce: 0.35, gib: true },
   { id: 'gib_torso', label: 'Body', shape: 'box', size: [0.42, 0.66, 0.22], mass: 25, color: 0xe0ac86, gib: true },
@@ -82,6 +85,7 @@ export function propVisual(id) {
   if (!visuals[id]) {
     const t = TYPE[id];
     if (t.weapon) return (visuals[id] = weaponVisual(id));
+    if (t.armour) return (visuals[id] = armourVisual(id));
     let geo;
     if (t.shape === 'box') geo = new THREE.BoxGeometry(...t.size);
     else if (t.shape === 'sphere') geo = new THREE.SphereGeometry(t.r, 20, 14);
@@ -189,7 +193,7 @@ export class PropWorld {
     const { geo, mat } = propVisual(t.id);
     if (t.gib && wounds == null) wounds = LOOSE[t.id] || 0;
     const gib = t.gib ? makeGib(t.id, color || t.color, wounds) : null;       // a real body piece, in its owner's skin colour
-    const mesh = gib || new THREE.Mesh(t.weapon && wounds ? weaponVisual(t.id, wounds).geo : geo, t.fuse ? mat.clone() : mat);
+    const mesh = gib || new THREE.Mesh(t.weapon && wounds ? weaponVisual(t.id, wounds).geo : t.armour && wounds ? armourVisual(t.id, true).geo : geo, t.fuse ? mat.clone() : mat);
     mesh.position.copy(pos);
     if (quat) mesh.quaternion.copy(quat);
     if (t.weapon && owner !== 'rack') mesh.quaternion.multiply(_q.setFromAxisAngle(_n.set(0, 0, 1), 1.35));   // weapons come out lying down, not balanced on end

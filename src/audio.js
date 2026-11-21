@@ -231,3 +231,25 @@ export function crack(vol = 1) {
   g.gain.setValueAtTime(0.25 * vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
   o.connect(g).connect(ac.destination); o.start(t); o.stop(t + 0.07);
 }
+
+/**
+ * Metal on metal: a blow caught on a blade, a shield or armour. `heavy` (0 to 1) lowers
+ * it and makes it ring longer (a shield or a breastplate rather than a sword).
+ */
+export function clang(vol = 1, heavy = 0) {
+  if (!ac || vol < 0.02) return;
+  const t = ac.currentTime, base = (1500 - 700 * heavy) * (0.92 + Math.random() * 0.16), ring = 0.28 + 0.3 * heavy;
+  // a handful of partials that do not line up, which is what makes it sound like metal
+  for (const [mult, gain, len] of [[1, 0.3, 1], [1.47, 0.22, 0.8], [2.09, 0.18, 0.6], [2.56, 0.12, 0.45], [3.6, 0.08, 0.3]]) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = mult === 1 ? 'triangle' : 'sine';
+    o.frequency.value = base * mult;
+    g.gain.setValueAtTime(gain * vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + ring * len);
+    o.connect(g).connect(ac.destination); o.start(t); o.stop(t + ring * len + 0.02);
+  }
+  // and the knock itself
+  const s = ac.createBufferSource(), bp = ac.createBiquadFilter(), g = ac.createGain();
+  s.buffer = noise; bp.type = 'bandpass'; bp.frequency.value = 3200 - 1400 * heavy; bp.Q.value = 1.2;
+  g.gain.setValueAtTime(0.8 * vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+  s.connect(bp).connect(g).connect(ac.destination); s.start(t); s.stop(t + 0.06);
+}

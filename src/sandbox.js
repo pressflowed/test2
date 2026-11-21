@@ -8,8 +8,8 @@ import { roundName } from './arena.js';
 
 // Per surface: tint over its texture, and how many metres one repeat of the texture covers.
 const SURFACE = {
-  grass: [0xffffff, 2.2], 'grass-dark': [0xc4dcb6, 2.2], wood: [0xffffff, 1.6], plank: [0xffffff, 1.5],
-  rock: [0xffffff, 3], stone: [0xffffff, 2.4], leaf: [0xffffff, 2], crate: [0xffffff, 1.2], metal: [0xffffff, 1],
+  grass: [0xffffff, 3], 'grass-dark': [0xd0e4c4, 3], wood: [0xffffff, 1.6], plank: [0xffffff, 2],
+  rock: [0xffffff, 3], stone: [0xffffff, 2.4], leaf: [0xffffff, 2.5], crate: [0xffffff, 1.2], metal: [0xffffff, 1],
 };
 
 // The map is a square MAP metres on a side.
@@ -256,7 +256,7 @@ function grassFloor(size) {
   const pos = geo.attributes.position, uv = geo.attributes.uv, col = [];
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), z = pos.getZ(i);
-    uv.setXY(i, x / 2.2, z / 2.2);
+    uv.setXY(i, x / 3, z / 3);
     const n = Math.sin(x * 0.21 + 1.3) * Math.cos(z * 0.17 - 0.4) + Math.sin((x + z) * 0.09) * 0.7 + Math.sin(x * 0.53 - z * 0.47) * 0.35;
     const k = 0.9 + n * 0.09;
     col.push(k, k * (1 + n * 0.02), k * 0.96);

@@ -30,6 +30,9 @@ export class Bot {
     this.cool = 0;                            // seconds until it may throw another
     this.strike = false;                      // a blow landed this frame (the session works out what it hit)
     this.weaponHand = -1;                     // the hand it holds a weapon in, if any (the session keeps this up to date)
+    this.shieldHand = -1;                     // the hand it holds a shield in, likewise: that one stays up in front of it
+    this.caught = null;                       // set by the session if the blow it is throwing has run into a guard
+    this.lastTip = null;
     this.pose = {
       head: { pos: new THREE.Vector3(), quat: new THREE.Quaternion() },
       hands: [0, 1].map(() => ({ pos: new THREE.Vector3(), quat: new THREE.Quaternion() })),
@@ -118,6 +121,7 @@ export class Bot {
       const side = i ? 1 : -1, sway = Math.sin(this.t * 1.3 + i * 2) * 0.05;
       const local = this._locals[i];
       if (blow >= 0 && i === striker) local.set(side * (0.32 - 0.2 * blow), 0.05 - 0.4 * blow, 0.05 - 0.75 * blow);
+      else if (i === this.shieldHand) local.set(side * 0.1, -0.5 + sway * 0.3, -0.42);         // shield up, in front of the chest (the head shows over it)
       else if (this.flinch > 0) local.set(side * 0.22, -0.12 + sway, -0.3);
       else if (i === this.weaponHand) local.set(side * 0.3, -0.38 + sway * 0.4, -0.32);       // weapon held up, ready
       else if (!lo.grounded) local.set(side * 0.45, -0.25, -0.1);
@@ -131,6 +135,7 @@ export class Bot {
       lo.toWorld(this._locals[i], this.pose.hands[i].pos);
       const hq = this.pose.hands[i].quat.copy(q);
       if (i === this.weaponHand) hq.multiply(this._q2.setFromAxisAngle(X, blow >= 0 && i === striker ? 0.5 - 1.7 * blow : 0)).multiply(ARMED_GRIP);   // the blade comes over and down
+      else if (i === this.shieldHand) hq.multiply(ARMED_GRIP);       // knuckles forward: so is the face of the shield
       else hq.multiply(GRIP[i]);
     }
   }

@@ -6,7 +6,7 @@ const http = require('http'), fs = require('fs'), path = require('path');
 const root = path.resolve(__dirname, '..');
 const out = path.resolve(process.argv[2] || path.join(root, 'tests', 'out'));
 fs.mkdirSync(out, { recursive: true });
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.glb': 'model/gltf-binary' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.glb': 'model/gltf-binary', '.jpg': 'image/jpeg' };
 const server = http.createServer((req, res) => {
   const file = path.join(root, decodeURIComponent(req.url.split('?')[0]).replace(/\/$/, '/index.html'));
   fs.readFile(file, (err, buf) => {
@@ -56,6 +56,7 @@ const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (
     await page.evaluate(() => {
       const T = game.THREE, S = game.session;
       Object.assign(game.ARENA, { intro: 2, prep: 6, result: 3, champion: 4 });     // a quick tournament
+      S.botKit = 0;          // and no shields or armour for the bots (tests/guard-browser.cjs is about those)
       game.T = {
         foe: () => (S.arena.a === 'h' ? S.arena.b : S.arena.a),
         // turn the view to look at a point
@@ -107,7 +108,7 @@ const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (
     });
     check(r.role === 'fighter' && Math.abs(r.me[2]) > 16.5 && Math.abs(r.me[0]) < 4 && Math.abs(r.foe[2]) > 16.5 && r.me[2] * r.foe[2] < 0, `the two fighters are in rooms at opposite ends: me z ${r.me[2].toFixed(1)}, bot z ${r.foe[2].toFixed(1)}`);
     check(!r.gates && r.blocked === 2, 'both gates are shut');
-    check(r.racks === 12 && r.hanging === 12, `six weapons hang on the walls of each room: ${r.racks} (${r.hanging} hanging)`);
+    check(r.racks === 20 && r.hanging === 20, `six weapons, two shields, a helmet and a chest plate hang on the walls of each room: ${r.racks} (${r.hanging} hanging)`);
     check(r.botArmed === 1, 'the bot has been handed one too');
     check(/You fight next/.test(r.title) && /Pick a weapon/.test(r.status), `I am told what to do: "${r.title}" / "${r.status}"`);
     await page.evaluate(() => { game.desktop.pitch = -0.1; });

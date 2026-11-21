@@ -462,6 +462,15 @@ export const COLOSSEUM = {
   gates: [[0, 0.25, -13.5, 2.5, 2.75, 0.5], [0, 0.25, 13.5, 2.5, 2.75, 0.5]],
   // where the weapons hang in each room, three on each side wall: [x, bottom y, z, yaw]
   racks: [0, 1].map(side => [[-1, 17.7], [-1, 19.1], [-1, 20.5], [1, 17.7], [1, 19.1], [1, 20.5]].map(([wx, wz]) => [wx * 3.6, 0.95, (side ? 1 : -1) * wz, Math.PI / 2])),
+  // the rest of each room's kit: a shield on each side wall between the weapons, and a helmet and
+  // a chest plate either side of the door: { type, pos (its middle), yaw }
+  kit: [0, 1].map(side => {
+    const s = side ? 1 : -1, out = s < 0 ? Math.PI : 0;           // `out`: turned to face into the room from the door wall
+    return [
+      { type: 'shield', pos: [-3.69, 1.95, s * 19.8], yaw: 0 }, { type: 'shield', pos: [3.69, 1.95, s * 19.8], yaw: Math.PI },
+      { type: 'helmet', pos: [-2.6, 1.75, s * 16.95], yaw: out }, { type: 'chestplate', pos: [2.6, 1.5, s * 16.98], yaw: out },
+    ];
+  }),
   /** The room a point is in or just outside (0 north, 1 south), or -1. */
   roomOf(x, z) { return Math.abs(x) < 4.5 && Math.abs(z) > 12.5 && Math.abs(z) < 23 ? (z < 0 ? 0 : 1) : -1; },
   /** A place in the seats for spectator number k: { pos, yaw } facing the middle. They fill up east and west. */
@@ -503,6 +512,7 @@ function buildArena(v) {
     fill(-4, 0.75, 17, 21.25, -3.75, 3.0, 'plank'); fill(3.75, 0.75, 17, 21.25, 4, 3.0, 'plank');
     fill(-4, 0.25, 17, 21.25, -3.25, 0.75, 'crate'); fill(3.25, 0.25, 17, 21.25, 4, 0.75, 'crate');
     for (const px of [-1.5, 1.25]) fill(px, 0.25, 16.5, 16.75, px + 0.25, 3.0, 'wood');             // posts by the door
+    fill(-3.25, 1.0, 16.5, 16.75, -2, 2.5, 'plank'); fill(2, 1.0, 16.5, 16.75, 3.25, 2.5, 'plank');  // boards either side of it, for the armour
     // the gate's surround, on the arena side, so you can tell the ends apart from across the sand
     fill(-1.75, 0.25, 12.75, 13, -1.25, 3.25, 'brick'); fill(1.25, 0.25, 12.75, 13, 1.75, 3.25, 'brick');
     fill(-1.75, 3.0, 12.75, 13, 1.75, 3.25, 'brick');

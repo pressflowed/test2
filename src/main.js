@@ -7,11 +7,12 @@ import { Locomotion } from './locomotion.js';
 import { Avatar, SKIN, fingertip } from './avatar.js';
 import { DesktopInput } from './input-desktop.js';
 import { VRInput } from './input-vr.js';
-import { initAudio, tap, boom, boing, crunch, jingle, thump, heartbeat, smack, tear, squelch, crack } from './audio.js';
+import { initAudio, tap, boom, boing, crunch, jingle, thump, heartbeat, smack, tear, squelch, crack, clang } from './audio.js';
 import { Voice } from './voice.js';
 import { buildScenery, lightButton } from './sandbox.js';
 import { SPAWNABLE, propVisual, propSize, BLAST_RADIUS, weaponHold } from './props.js';
-import { SWING, swingPower } from './weapons.js';
+import { SWING, BLOCK, swingPower, guardStops } from './weapons.js';
+import { ARMOUR, SLOTS } from './armour.js';
 import { gibWounds } from './gibs.js';
 import { ARENA, roundName } from './arena.js';
 import { Net } from './net.js';
@@ -28,6 +29,7 @@ import { VoxelRenderer } from './voxelmesh.js';
 import { MAPS, COLOSSEUM } from './maps.js';
 import { ROUND } from './rounds.js';
 import { Hud } from './hud.js';
+import { loadTextures } from './textures.js';
 
 const $ = id => document.getElementById(id);
 const canvas = $('view');
@@ -68,6 +70,7 @@ addEventListener('resize', resize);
 resize();
 
 // ---- world, player, inputs
+const photoCount = await loadTextures();   // the photo textures must be in before anything is built with them
 const world = new World();
 const voxels = world.voxels = new VoxelWorld();
 const level = buildScenery(scene, world);
@@ -300,7 +303,19 @@ session.onBleed = (pos, dir, spurt, sc = 1) => {
   if (spurt) blood.spray(pos, dir, 16, 2.8 * Math.sqrt(sc), 0.02 * sc, 0.3);
   else blood.spray(pos, null, 2, 0.7, 0.016 * sc);
 };
+// sparks where metal meets metal
+function sparks(p, n = 8) {
+  debris.burst(Array.from({ length: n }, () => [p.x + (Math.random() - 0.5) * 0.06, p.y + (Math.random() - 0.5) * 0.06, p.z + (Math.random() - 0.5) * 0.06, [0xfff2a8, 0xffd060, 0xffffff][Math.floor(Math.random() * 3)]]), p, 0.022, GRAVITY[session.settings.gravity]);
+}
 session.onBodyFx = e => {
+  if (e.k === 'wear') {
+    if (e.id === session.myId) {
+      hud.flash(`${ARMOUR[SLOTS[e.slot]].label} on`, e.slot ? 'It takes the blows to your body, until it is knocked off' : 'It takes the blows to your head, until it is knocked off', 3.5);
+      for (let i = 0; i < 2; i++) vr.pulse(i, 0.6, 80);
+    }
+    clang(e.id === session.myId ? 0.35 : 0.15, 0.6);
+    return;
+  }
   if (!e.p) return;
   const mine = e.id === session.myId, by = e.by === session.myId;
   const p = new THREE.Vector3().fromArray(e.p);
@@ -379,8 +394,31 @@ session.onBodyFx = e => {
   } else if (e.k === 'grab' && mine) {
     hud.flash(`${session.nameOf(e.by)} has your arm!`, 'It tears off if it is pulled too far', 3, red);
     for (let i = 0; i < 2; i++) vr.pulse(i, 0.8, 200);
+  } else if (e.k === 'block') {
+    // a blow caught on a weapon or a shield: it rings, it sparks, and both hands feel it
+    const hard = Math.min((e.v || 3) / 7, 1), held = session.weaponIn(e.id, e.dh), shield = !!(held && held.type.weapon.shield);
+    clang(vol * (0.5 + 0.5 * hard), shield ? 0.8 : 0.1);
+    sparks(p, 4 + Math.round(hard * 8));
+    if (mine) {
+      vr.pulse(e.dh, 0.6 + 0.4 * hard, 160);
+      if (blockTips-- > 0) hud.flash('Blocked!', shield ? 'Your shield took that' : 'You caught that on your weapon', 1.6, '#9bd0ff');
+    } else if (by) hud.flash('Blocked', '', 0.9);
+  } else if (e.k === 'armour') {
+    // a blow rang off armour; the last one it can take sends it flying
+    const piece = ARMOUR[SLOTS[e.slot]].label, off = e.left === 0;
+    clang(vol * (off ? 1 : 0.8), 0.55);
+    sparks(p, off ? 12 : 6);
+    if (mine) {
+      hud.hurt(0.15);
+      hud.flash(off ? `${piece} knocked off!` : `${piece} took that`, off ? '' : 'It will not last for ever', off ? 3 : 1.4, off ? red : '#9bd0ff');
+      for (let i = 0; i < 2; i++) vr.pulse(i, off ? 1 : 0.6, off ? 220 : 110);
+    } else if (by) {
+      vr.pulse(e.hand >= 0 ? e.hand : 1, 0.8, 110);
+      hud.flash(off ? `${piece} knocked off` : 'Armour', off ? `${session.nameOf(e.id)} has lost it` : 'Hit somewhere it does not cover, or keep at it', off ? 2.5 : 1.4);
+    }
   }
 };
+let blockTips = 3;               // how many more times to say what just happened when I block
 // the arena tournament moved on: gates, the board, where I should be, and what to tell me
 function arenaLine(st) {
   const n = id => session.nameOf(id);
@@ -402,7 +440,7 @@ session.onArena = (st, prev) => {
   } else if (st.phase === 'prep') {
     if (mine || onFloor) respawn();           // fighters to their rooms; nobody else stays on the sand
     const title = roundName(st.rounds[st.r].length);
-    if (mine) hud.flash('You fight next!', `${title} against ${n(st.a === me ? st.b : st.a)}. Take a weapon off the wall`, 6, gold);
+    if (mine) hud.flash('You fight next!', `${title} against ${n(st.a === me ? st.b : st.a)}. Weapons and shields on the walls, armour by the door`, 6, gold);
     else hud.flash(`${n(st.a)} vs ${n(st.b)}`, title, 4);
     jingle([523, 659]);
   } else if (st.phase === 'fight') {
@@ -546,6 +584,7 @@ function menuAction(id) {
     case 'resetmap': session.resetMap(); break;
     case 'smash': case 'pvp': session.pressButton(id); break;
     case 'addbot': session.addBot(); break;
+    case 'addknight': session.addBot(true); break;
     case 'clearbots': session.clearBots(); break;
     case 'calibrate': calib = 3.99; break;   // counts down so you can put your arms down first
     case 'home': if (free) respawn(); break;
@@ -612,6 +651,34 @@ function heldWeapon(i) {
 }
 
 // My hands against other bodies: a fast hand (or weapon) landing on someone hurts them.
+// Has this blow of mine run into what somebody is holding? `from` to `to` is the thing itself
+// (hand to tip), `was` where its far end was a frame ago. A blow that does cannot hurt them
+// for a moment; if it was going at any speed, everyone hears it and we both feel it.
+const guarded = [null, null];        // per hand: { id, t } of the last guard it met
+const onGuard = [null, null];        // per hand: whose guard it is on right now
+function meetGuards(i, from, to, was, r, v, now, loud = BLOCK.clang) {
+  let met = null;
+  for (const [id, rg] of session.rigs) {
+    if (!session.canHurt(id) || rg.head.distanceTo(to) > 2.2 * rg.scale + 1.2) continue;
+    for (const gd of session.guards(id)) {
+      const at = guardStops(gd.g, from, to, r) || (was ? guardStops(gd.g, was, to, r) : null);
+      if (at) { met = { id, hand: gd.hand, at, shield: !!gd.prop.type.weapon.shield }; break; }
+    }
+    if (met) break;
+  }
+  if (met) {
+    if (onGuard[i] !== met.id && v > loud && now > calmUntil && now - lastBlock[i] > BLOCK.again) {
+      lastBlock[i] = now;
+      session.block(met.id, met.hand, i, met.at, v);
+      vr.pulse(i, 1, 140);                       // the jolt of it stopping dead
+    }
+    guarded[i] = { id: met.id, t: now };
+  }
+  onGuard[i] = met ? met.id : null;
+}
+const lastBlock = [0, 0];
+const blockedBy = (i, id, now) => !!guarded[i] && guarded[i].id === id && now - guarded[i].t < BLOCK.window;
+
 function fight(now) {
   const s = loco.scale, mine = session.body();
   for (let i = 0; i < 2; i++) {
@@ -632,10 +699,12 @@ function fight(now) {
       }
       const hist = tipHist[i], last = hist[hist.length - 1];        // pt is now the last point: the far end
       if (last && last.p.distanceTo(pt) > 2 * s) hist.length = 0;   // teleported
+      const was = hist.length ? hist[hist.length - 1].p : null;
       hist.push({ p: pt.clone(), t: now });
       while (hist.length > 5) hist.shift();
       const v = velocityOf(hist).length() / s;
-      if (on && wTouch[i] !== on && now - lastHit[i] > 250 && now > calmUntil && v > SWING.min) {
+      meetGuards(i, hp, pt, was, w.r, v, now);
+      if (on && wTouch[i] !== on && now - lastHit[i] > 250 && now > calmUntil && v > SWING.min && !blockedBy(i, on, now)) {
         lastHit[i] = now;
         session.hit(on, part, swingPower(w, v, s), i, wp.id);
         vr.pulse(i, 1, 120);
@@ -649,10 +718,14 @@ function fight(now) {
       part = hitPart(rg, session.body(id).cut, hp, RIG.handR * s);
       if (part) { on = id; break; }
     }
+    // a bare fist can be caught on a shield or a blade too
+    const free = mine.canUse(i) && session.held[i] == null && !armHold[i] && !(i === 1 && carry);
+    if (free) { const hh = handHist[i], was = hh.length > 1 ? hh[hh.length - 2].p : null; meetGuards(i, hp, hp, was, RIG.handR * s, handVelocity(i).length() / s, now, FIGHT.speed); }    // (a hand only rings on it at punching speed)
+    else onGuard[i] = null;
     // only the moment the hand arrives counts, so resting a hand on someone does nothing
     if (on && touching[i] !== on && now - lastHit[i] > FIGHT.cooldown && now > calmUntil && session.held[i] == null && !armHold[i] && !(i === 1 && carry)) {
       const v = handVelocity(i).length() / s;
-      if (v > FIGHT.speed && v < 30) {      // faster than any arm: that was a teleport, not a punch
+      if (v > FIGHT.speed && v < 30 && !blockedBy(i, on, now)) {      // faster than any arm: that was a teleport, not a punch
         lastHit[i] = now;
         session.hit(on, part, punchPower(v, s), i);
         vr.pulse(i, 1, 90);
@@ -699,7 +772,9 @@ function punchAhead() {
   const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(localPose.head.quat);
   const mine = session.body();
   // the hand with a weapon in it, if there is one
-  const hand = heldWeapon(1) && mine.canUse(1) ? 1 : heldWeapon(0) && mine.canUse(0) ? 0 : mine.canUse(1) ? 1 : mine.canUse(0) ? 0 : -1;
+  // (and a bare fist rather than a shield)
+  const armed = i => { const p = heldWeapon(i); return !!p && !p.type.weapon.shield && mine.canUse(i); }, bare = i => !heldWeapon(i) && mine.canUse(i);
+  const hand = armed(1) ? 1 : armed(0) ? 0 : bare(1) ? 1 : bare(0) ? 0 : mine.canUse(1) ? 1 : mine.canUse(0) ? 0 : -1;
   if (hand < 0) return;
   const wp = heldWeapon(hand), w = wp && wp.type.weapon;
   desktop.swing(hand);
@@ -710,7 +785,14 @@ function punchAhead() {
       for (const [id, rg] of session.rigs) {
         if (!session.canHurt(id)) continue;
         const part = hitPart(rg, session.body(id).cut, p, 0.09 * s);
-        if (part) { session.hit(id, part, w ? swingPower(w, 5, s) : FIGHT.keyPower * s ** 1.5, hand, wp ? wp.id : null); return; }
+        if (!part) continue;
+        // whatever they are holding between me and that spot catches it
+        for (const gd of session.guards(id)) {
+          const at = guardStops(gd.g, localPose.head.pos, p, 0.06 * s);
+          if (at) { session.block(id, gd.hand, hand, at, 5); return; }
+        }
+        session.hit(id, part, w ? swingPower(w, 5, s) : FIGHT.keyPower * s ** 1.5, hand, wp ? wp.id : null);
+        return;
       }
     }
   }
@@ -871,15 +953,15 @@ renderer.setAnimationLoop((time, frame) => {
       act.del[1] = k('KeyX');
       act.next = wheel;
       for (let n = 1; n <= 8; n++) if (k('Digit' + n)) act.slot = n - 1;
-      act.grab = [false, !!desktop.keys.KeyG];
-      act.grabEdge = [false, k('KeyG')];
+      act.grab = [!!desktop.keys.KeyA, !!desktop.keys.KeyG];        // A: the left hand (for a shield, say)
+      act.grabEdge = [k('KeyA'), k('KeyG')];
       if (k('KeyM')) armMenu.visible = !armMenu.visible;
       if (k('KeyT')) { armMenu.visible = true; armMenu.nextTab(); }
       if (k('Comma')) armMenu.nextPage(-1);
       if (k('Period')) armMenu.nextPage(1);
       for (const [code, id] of [['BracketLeft', 'size-'], ['BracketRight', 'size+'], ['Minus', 'power-'], ['Equal', 'power+'],
         ['KeyL', 'gravity'], ['KeyN', 'sky'], ['KeyP', 'rain'], ['KeyB', 'balloons'], ['KeyC', 'clear'], ['KeyH', 'smash'], ['Backspace', 'resetmap'],
-        ['KeyU', 'addbot'], ['KeyI', 'clearbots'], ['Digit0', 'pvp']]) if (k(code)) act.menu.push(id);
+        ['KeyU', 'addbot'], ['Digit9', 'addknight'], ['KeyI', 'clearbots'], ['Digit0', 'pvp']]) if (k(code)) act.menu.push(id);
     }
     headLocal.copy(desktop.headLocal); headQuatLocal.copy(desktop.headQuat);
     for (let i = 0; i < 2; i++) {
@@ -1036,11 +1118,12 @@ renderer.setAnimationLoop((time, frame) => {
         if (rg) vr.pulse(i, Math.min(1, 0.1 + 0.9 * (hp.distanceTo(rg.shoulder[has.arm]) / (RIP_LENGTH * rg.scale)) ** 2), 30);
       }
       if (act.grab[i] && !latch[i] && !busy && !armHold[i] && session.held[i] == null && session.grab(i, hp, s)) {
+        if (session.held[i] == null) latch[i] = true;      // that was armour, and it is on: this squeeze is used up
         stuck[i] = !!heldWeapon(i);
         lastSqueeze[i] = 0;
         if (stuck[i]) { calmUntil = now + 300; tipHist[i].length = 0; }      // taking hold of a weapon is not a swing of it
         if (inVR) vr.pulse(i, stuck[i] ? 0.9 : 0.5, stuck[i] ? 90 : 50);
-        if (stuck[i] && weaponTips-- > 0) hud.flash(heldWeapon(i).type.label, inVR ? 'It stays in your hand. Squeeze grip twice quickly to drop it' : 'It stays in your hand. Press G again to drop it', 4);
+        if (stuck[i] && weaponTips-- > 0) hud.flash(heldWeapon(i).type.label, inVR ? 'It stays in your hand. Squeeze grip twice quickly to drop it' : `It stays in your hand. Press ${i ? 'G' : 'A'} again to drop it`, 4);
       }
       if (!act.grab[i] && session.held[i] != null && !stuck[i]) session.release(i, handVelocity(i));
     }
@@ -1151,5 +1234,5 @@ window.game = {
   THREE, loco, desktop, vr, renderer, scene, camera, get avatar() { return avatar; }, respawn, playDesktop, stats, session, net, level,
   armMenu, sky, menuAction, setSize, setPower, get carry() { return carry; }, get time() { return gameTime; },
   voxels, voxelView, world, hud, punchAhead, tryPunch, ROUND, voice, stomp, SHAKE,
-  blood, fight, ripAhead, tryHoldArm, punchPower, BODY, FIGHT, RIG, handHist, ARENA, COLOSSEUM, heldWeapon, stuck,
+  blood, fight, ripAhead, tryHoldArm, punchPower, BODY, FIGHT, RIG, handHist, ARENA, COLOSSEUM, heldWeapon, stuck, photoCount,
 };

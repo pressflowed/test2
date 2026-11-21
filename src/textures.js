@@ -1,5 +1,8 @@
-// Textures painted on canvases at startup, so the game needs no image files.
-// Everything tiles seamlessly. In Node (tests) there is no canvas, so these return null.
+// Surface textures. The ground, walls, wood and so on are photos from TextureTown
+// (https://textures.neocities.org, see assets/textures/CREDITS.md), loaded by loadTextures().
+// Props with a design of their own (dice, TNT, beach ball...) are painted on canvases here,
+// and so is any surface whose photo failed to load. Everything tiles seamlessly.
+// In Node (tests) there is no canvas, so these return null.
 import * as THREE from 'three';
 
 const HAS_DOM = typeof document !== 'undefined';
@@ -302,14 +305,55 @@ const PAINT = {
   },
 };
 // props that reuse a level texture
+// Surfaces that have a photo in assets/textures/<name>.jpg.
+const PHOTOS = ['grass', 'leaf', 'hay', 'sand', 'dirt', 'rock', 'stone', 'brick', 'marble', 'plaster', 'roof', 'wood', 'plank', 'crate', 'metal'];
+const photos = {};
+
+// Drawn over a photo: a crate is planks with a frame and a brace nailed on.
+const OVER = {
+  crate(g, s) {
+    g.strokeStyle = '#7a5226'; g.lineWidth = s * 0.11; g.strokeRect(0, 0, s, s);
+    g.lineWidth = s * 0.08; g.beginPath(); g.moveTo(0, 0); g.lineTo(s, s); g.stroke();
+    g.strokeStyle = 'rgba(40,22,8,.55)'; g.lineWidth = 2; g.strokeRect(s * 0.055, s * 0.055, s * 0.89, s * 0.89);
+    g.fillStyle = '#3a2a1a';
+    for (const [x, y] of [[.06, .06], [.94, .06], [.06, .94], [.94, .94]]) { g.beginPath(); g.arc(x * s, y * s, s * 0.018, 0, 7); g.fill(); }
+  },
+};
+
+/**
+ * Fetch the photo textures. Call (and wait for) this before anything asks for a texture.
+ * A photo that is missing or slow is skipped, and that surface is painted instead.
+ * Resolves to how many loaded.
+ */
+export async function loadTextures(base = 'assets/textures/', patience = 6000) {
+  if (!HAS_DOM) return 0;
+  await Promise.all(PHOTOS.map(name => new Promise(done => {
+    const img = new Image();
+    const timer = setTimeout(done, patience);
+    img.onload = () => { photos[name] = img; clearTimeout(timer); done(); };
+    img.onerror = () => { clearTimeout(timer); done(); };
+    img.src = `${base}${name}.jpg`;
+  })));
+  return Object.keys(photos).length;
+}
+
+// How to draw a surface: its photo if there is one, otherwise the painted version.
+function painter(name) {
+  name = ALIAS[name] || name;
+  const img = photos[name];
+  if (!img) return PAINT[name];
+  return (g, s) => { g.drawImage(img, 0, 0, s, s); if (OVER[name]) OVER[name](g, s); };
+}
+
 const ALIAS = { bigcrate: 'crate', platform: 'metal', wall: 'stone', pillar: 'stone', beam: 'wood', table: 'plank', 'grass-dark': 'grass' };
 
 /** A texture by name, or null if there is none (or no canvas, as in tests). */
 export function texture(name) {
   if (!HAS_DOM) return null;
   name = ALIAS[name] || name;
-  if (!PAINT[name]) return null;
-  if (!cache[name]) cache[name] = make(256, PAINT[name]);
+  const draw = painter(name);
+  if (!draw) return null;
+  if (!cache[name]) cache[name] = make(256, draw);
   return cache[name];
 }
 
@@ -355,7 +399,7 @@ export function textureArray(names, size = 256) {
     const cv = document.createElement('canvas');
     cv.width = cv.height = size;
     const g = cv.getContext('2d', { willReadFrequently: true });
-    (PAINT[ALIAS[name] || name] || PAINT.rock)(g, size);
+    (painter(name) || PAINT.rock)(g, size);
     data.set(g.getImageData(0, 0, size, size).data, (n + 1) * size * size * 4);
   });
   const tex = new THREE.DataArrayTexture(data, size, size, names.length + 1);

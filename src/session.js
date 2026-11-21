@@ -11,7 +11,8 @@
 // for the same punches on every machine, in any order.
 import * as THREE from 'three';
 import { PropWorld, SPAWNABLE, TYPE, MAX_GIBS, weaponHold } from './props.js';
-import { WEAPONS } from './weapons.js';
+import { WEAPONS, ARMS, guardOf, guardStops } from './weapons.js';
+import { ARMOUR, SLOTS } from './armour.js';
 import { Tournament } from './arena.js';
 import { gibFrame, LOOSE, RIGHT, CUT } from './gibs.js';
 import { Avatar } from './avatar.js';
@@ -77,6 +78,7 @@ export class Session {
     this.poses = new Map();     // id -> { head, hands, scale } this frame
     this.rigs = new Map();      // id -> joints (see bodyrig.js)
     this.hands = new Map();     // id -> hands as drawn (a held arm follows whoever holds it)
+    this.botKit = 0.4;          // the chance an arena bot is given each of a shield, a helmet and a chest plate
     this.bots = new Map();      // id -> Bot (host only)
     this._botN = 0;
     this._drip = new Map();
@@ -274,7 +276,8 @@ export class Session {
   }
 
   // ---- bots (host only): to everyone else they are just more players
-  _addBot(near) {
+  // kit: a sandbox dummy in a helmet and a chest plate, holding a shield up, to try blows on
+  _addBot(near, kit = false) {
     const mode = this.settings.mode;
     if (this.bots.size >= MAX_BOTS || mode === 'hideseek') return;
     const id = 'b' + (++this._botN);
@@ -288,12 +291,14 @@ export class Session {
       pos = near ? near.clone() : new THREE.Vector3(0, 0, 3);
       pos.y = Math.max(pos.y - 0.6, 0) + 0.3;
     }
+    if (kit && mode === 'sandbox') name = `Knight ${this._botN}`;
     const bot = new Bot(id, this._botN, this.world, pos, name);
     if (mode === 'arena') bot.place(pos, COLOSSEUM.seat(this.bots.size * 2 + 1).yaw);
     this.bots.set(id, bot);
     const p = { id, name: bot.name, color: bot.color, state: packState(bot.pose), bot: true };
     this.players.set(id, p);
     this._ensureAvatar(p);
+    if (kit && mode === 'sandbox') { bot.kit = { prop: null }; this._kitOut(id); }
     this._broadcastRoster();
   }
   _clearBots() {
@@ -402,7 +407,7 @@ export class Session {
     // outside the sandbox there is no spawning, deleting or undoing
     if (this.settings.mode !== 'sandbox' && ['spawn', 'throw', 'del', 'undo'].includes(msg.t)) return;
     // and in the arena only the two fighters may pick things up
-    if (this.settings.mode === 'arena' && msg.t === 'grab' && this.role(from) !== 'fighter') return;
+    if (this.settings.mode === 'arena' && (msg.t === 'grab' || msg.t === 'wear') && this.role(from) !== 'fighter') return;
     switch (msg.t) {
       case 'spawn': {
         if (!TYPE[msg.type] || TYPE[msg.type].gib || !Array.isArray(msg.pos)) return;
@@ -424,6 +429,16 @@ export class Session {
         if (hand) props.grab(msg.id, { key: `${from}:${msg.hand}`, pos: hand.pos, quat: hand.quat });
         break;
       }
+      case 'wear': {
+        // picking up a piece of armour puts it on
+        const p = props.props.get(msg.id), body = this.body(from), pose = this.poses.get(from);
+        if (!p || !p.type.armour || p.wounds || p.held || !pose || pose.head.pos.distanceTo(p.mesh.position) > 3 * pose.scale + 1) break;
+        if (!body.wear(p.type.armour.slot)) break;
+        props.remove(p.id);
+        this._fx({ k: 'wear', id: from, slot: p.type.armour.slot });
+        break;
+      }
+      case 'block': this._hostBlock(from, msg); break;
       case 'release': {
         const p = props.props.get(msg.id);
         if (p && p.held && p.held.key === `${from}:${msg.hand}`) props.release(msg.id, msg.vel ? new THREE.Vector3().fromArray(msg.vel) : null);
@@ -457,7 +472,7 @@ export class Session {
       case 'bot':
         if (msg.cmd === 'add') {
           const pose = this.poses.get(from);
-          this._addBot(pose ? pose.head.pos.clone().add(new THREE.Vector3(0, 0, -2.5).applyQuaternion(pose.head.quat).setY(0)) : null);
+          this._addBot(pose ? pose.head.pos.clone().add(new THREE.Vector3(0, 0, -2.5).applyQuaternion(pose.head.quat).setY(0)) : null, !!msg.kit);
         } else if (msg.cmd === 'clear') this._clearBots();
         break;
       case 'mode': this._hostSetMode(msg.mode); break;
@@ -530,26 +545,50 @@ export class Session {
       props.clear();
       this.held = [null, null];
       for (const id of [e.a, e.b]) this.body(id).reset();
-      const kinds = Object.keys(WEAPONS);
+      for (const b of this.bodies.values()) b.armour = [0, 0];      // whatever anyone still had on from an earlier fight is back on the wall
+      const yawQ = yaw => new THREE.Quaternion().setFromAxisAngle(DOWN, -yaw);
+      const hang = (type, pos, yaw) => { const p = props.spawn(type, pos, yawQ(yaw), { owner: 'rack' }); if (p && p.body) p.body.sleep(); };   // they hang there until someone takes one
       COLOSSEUM.racks.forEach(rack => rack.forEach(([x, y, z, yaw], k) => {
-        const type = kinds[k % kinds.length];
-        const p = props.spawn(type, new THREE.Vector3(x, y + WEAPONS[type].size[1] / 2, z), new THREE.Quaternion().setFromAxisAngle(DOWN, -yaw), { owner: 'rack' });
-        if (p && p.body) p.body.sleep();        // they hang there until someone takes one
+        const type = ARMS[k % ARMS.length];
+        hang(type, new THREE.Vector3(x, y + WEAPONS[type].size[1] / 2, z), yaw);
       }));
+      COLOSSEUM.kit.forEach(kit => kit.forEach(k => hang(k.type, new THREE.Vector3().fromArray(k.pos), k.yaw)));
       this._seatBots(e);
-      // a bot fighter goes to its room and is handed something at random
+      // a bot fighter goes to its room and is handed something at random; some get a shield or armour too
       [e.a, e.b].forEach((id, side) => {
         const bot = this.bots.get(id);
         if (!bot) return;
         const room = COLOSSEUM.rooms[side];
         bot.place(new THREE.Vector3().fromArray(room.spawn), room.yaw);
-        const type = kinds[Math.floor(Math.random() * kinds.length)], hand = bot.pose.hands[1];
-        const p = props.spawn(type, hand.pos.clone(), null, { owner: 'rack' });
-        if (p) props.grab(p.id, { key: `${id}:1`, pos: hand.pos, quat: hand.quat });
+        this._arm(id, ARMS[Math.floor(Math.random() * ARMS.length)], 1);
+        if (Math.random() < this.botKit) this._arm(id, 'shield', 0);
+        for (let slot = 0; slot < 2; slot++) if (Math.random() < this.botKit) this.body(id).wear(slot);
       });
     } else if (e.type === 'result' || e.type === 'champion') {
       for (const bot of this.bots.values()) bot.cheer();
     }
+  }
+
+  // a sandbox dummy puts on what it was made with (again, each time it comes back from the dead)
+  _kitOut(id) {
+    const bot = this.bots.get(id), kit = bot && bot.kit;
+    if (!kit) return;
+    this.body(id).wear(0); this.body(id).wear(1);
+    const old = kit.prop != null ? this.props.props.get(kit.prop) : null;
+    if (old && !old.held) this.props.remove(old.id);          // the shield it dropped when it died
+    bot.shieldHand = 0;
+    const p = this._arm(id, 'shield', 0);
+    kit.prop = p ? p.id : null;
+  }
+
+  // put a weapon (or a shield) straight into a bot's hand
+  _arm(id, type, hand) {
+    const bot = this.bots.get(id);
+    if (!bot) return null;
+    const h = bot.pose.hands[hand];
+    const p = this.props.spawn(type, h.pos.clone(), null, { owner: 'rack' });
+    if (p) this.props.grab(p.id, { key: `${id}:${hand}`, pos: h.pos, quat: h.quat });
+    return p;
   }
 
   // bots that are not fighting sit in the seats (all of them, or just `only`)
@@ -576,13 +615,25 @@ export class Session {
     if (!this.mayHurt(id, foe) || !ap || !tp || !(body.canUse(0) || body.canUse(1))) return;
     if (ap.head.pos.distanceTo(tp.head.pos) > this._reach(held) + 0.3) return;        // they got away
     const w = held && held.type.weapon;
-    const roll = Math.random(), part = roll < 0.45 ? 'torso' : roll < 0.6 ? 'head' : ['upperL', 'foreL', 'upperR', 'foreR'][Math.floor(Math.random() * 4)];
-    const arm = part.endsWith('L') ? 0 : 1, gone = part !== 'torso' && part !== 'head' && tb.cut[arm] >= (part.startsWith('fore') ? 1 : 2);
+    const hand = Number(held ? held.held.key.split(':')[1] : body.canUse(1) ? 1 : 0);
+    const roll = Math.random(), aim = roll < 0.45 ? 'torso' : roll < 0.6 ? 'head' : ['upperL', 'foreL', 'upperR', 'foreR'][Math.floor(Math.random() * 4)];
+    const arm = aim.endsWith('L') ? 0 : 1, gone = aim !== 'torso' && aim !== 'head' && tb.cut[arm] >= (aim.startsWith('fore') ? 1 : 2);
+    const part = gone ? 'torso' : aim;
+    // Caught on what they are holding? Either the weapon ran into it (at some point in the swing, or
+    // where it has ended up), or it is in the way: it hides the part the blow was meant for from
+    // the shoulder that threw it. So a shield held between you and a bot covers what is behind it.
+    const bot = this.bots.get(id), hp = ap.hands[hand].pos, rig = this.rigs.get(id), tr = this.rigs.get(foe);
+    const target = !tr ? null : part === 'head' ? tr.head : part === 'torso' ? tr.torsoTop.clone().lerp(tr.torsoBottom, 0.4) : (part.startsWith('fore') ? tr.wrist : tr.elbow)[arm];
+    const caught = (bot && bot.caught)
+      || this._caught(foe, hp, w ? held.mesh.position.clone().add(new THREE.Vector3(0, w.hits[w.hits.length - 1][1], 0).applyQuaternion(held.mesh.quaternion)) : hp, w ? w.r : RIG.handR)
+      || (rig && target ? this._caught(foe, rig.shoulder[hand], target, 0.08) : null);
+    if (caught) return this._fx({ k: 'block', id: foe, dh: caught.hand, by: id, hand, p: caught.at.toArray().map(r3), v: 5 });
     const dmg = (w ? w.dmg * 0.65 : 13) * (0.8 + Math.random() * 0.4);
     const dir = tp.head.pos.clone().sub(ap.head.pos).setY(0).normalize();
     const sharp = !!(w && w.sharp), blunt = !!(w && !w.sharp);
-    if (w) this.props.bloody(held);
-    this._bodyEvents(foe, tb.hit(gone ? 'torso' : part, dmg, { sharp, blunt }), { by: id, hand: Number(held ? held.held.key.split(':')[1] : body.canUse(1) ? 1 : 0), dir, push: Math.min(dmg / 10, 4.5) * (w ? w.knock : 1), sharp, blunt });
+    const events = tb.hit(part, dmg, { sharp, blunt });
+    if (w && events.some(e => e.type === 'hit')) this.props.bloody(held);
+    this._bodyEvents(foe, events, { by: id, hand, dir, push: Math.min(dmg / 10, 4.5) * (w ? w.knock : 1), sharp, blunt });
   }
 
   _setRound(round) {
@@ -632,6 +683,8 @@ export class Session {
     if (this.held[i] != null) return false;
     const p = this.props.nearest(handPos, 0.18 * scale, pr => !pr.held && !pr.heldKey);
     if (!p) return false;
+    // armour you are not already wearing goes straight on (a dented piece is only scrap, to hold or throw)
+    if (p.type.armour && !p.wounds && this.body().armour[p.type.armour.slot] === 0) { this.request({ t: 'wear', id: p.id }); return true; }
     this.held[i] = p.id;
     this.request({ t: 'grab', id: p.id, hand: i });
     return true;
@@ -667,12 +720,29 @@ export class Session {
     for (const p of this.props.props.values()) if (p.type.weapon && ((p.held && p.held.key === key) || p.heldKey === key)) return p;
     return null;
   }
+  /**
+   * What a player is holding that would stop a blow: [{ hand, prop, g }] (g as guardOf() gives it),
+   * taken from where those things are drawn, so a blow that looks caught is caught.
+   */
+  guards(id) {
+    const out = [];
+    for (const p of this.props.props.values()) {
+      if (!p.type.weapon) continue;
+      const key = p.held ? p.held.key : p.heldKey;
+      if (key !== `${id}:0` && key !== `${id}:1`) continue;
+      out.push({ hand: key.endsWith('1') ? 1 : 0, prop: p, g: guardOf(p.type.weapon, p.mesh.position, p.mesh.quaternion) });
+    }
+    return out;
+  }
+  /** My blow (from `hand`) was caught on what `id` holds in their hand `dh`, at point p, going v m/s. */
+  block(id, dh, hand, p, v) { this.request({ t: 'block', id, dh, hand, p: p.toArray().map(r3), v: r3(v) }); }
   /** Take hold of someone's arm with one of my hands; pull far enough and it comes off. */
   holdArm(id, arm, hand) { this.request({ t: 'hold', id, arm, hand }); }
   letGoArm(hand) { this.request({ t: 'unhold', hand }); }
   /** Mouse players cannot pull, so they get to take a bot's arm straight off. */
   ripArm(id, arm, hand) { this.request({ t: 'rip', id, arm, hand }); }
-  addBot() { this.request({ t: 'bot', cmd: 'add' }); }
+  /** Add a bot. kit: (sandbox) one in armour with a shield. */
+  addBot(kit = false) { this.request({ t: 'bot', cmd: 'add', kit: kit ? 1 : 0 }); }
   clearBots() { this.request({ t: 'bot', cmd: 'clear' }); }
   /** Whose arm, if any, this hand of mine has hold of: { id, arm } or null. */
   holding(hand) {
@@ -692,8 +762,31 @@ export class Session {
     const dmg = Math.min(Math.max(Number(msg.power) || 0, 0), 250) / Math.pow(tp.scale, 1.5);  // bigger bodies shrug more off
     const dir = tp.head.pos.clone().sub(ap.head.pos).setY(0).normalize();
     const sharp = !!(w && w.sharp), blunt = !!(w && !w.sharp);
-    if (w) this.props.bloody(held);
-    this._bodyEvents(msg.id, tb.hit(msg.part, dmg, { sharp, blunt }), { by: from, hand, dir, push: Math.min(dmg / 10, 4.5) * (w ? w.knock : 1), sharp, blunt });
+    // the one who swung judged that it landed; if from here it is plainly lying on their guard, it did not
+    const from0 = ap.hands[hand].pos, to = w ? held.mesh.position.clone().add(new THREE.Vector3(0, w.hits[w.hits.length - 1][1], 0).applyQuaternion(held.mesh.quaternion)) : from0;
+    const caught = this._caught(msg.id, from0, to, w ? w.r : RIG.handR * ap.scale);
+    if (caught) return this._fx({ k: 'block', id: msg.id, dh: caught.hand, by: from, hand, p: caught.at.toArray().map(r3), v: 4 });
+    const events = tb.hit(msg.part, dmg, { sharp, blunt });
+    if (w && events.some(e => e.type === 'hit')) this.props.bloody(held);
+    this._bodyEvents(msg.id, events, { by: from, hand, dir, push: Math.min(dmg / 10, 4.5) * (w ? w.knock : 1), sharp, blunt });
+  }
+
+  // Is something along the line from p0 to p1 (radius r) on one of this player's guards? { hand, at } or null.
+  _caught(id, p0, p1, r) {
+    for (const gd of this.guards(id)) {
+      const at = guardStops(gd.g, p0, p1, r);
+      if (at) return { hand: gd.hand, at };
+    }
+    return null;
+  }
+
+  // A player says their blow was caught on someone's weapon or shield: everyone hears it, and the two of them feel it.
+  _hostBlock(from, msg) {
+    const hand = msg.hand ? 1 : 0, dh = msg.dh ? 1 : 0;
+    const tp = this.poses.get(msg.id), ap = this.poses.get(from);
+    if (!this.mayHurt(from, msg.id) || !tp || !ap || !Array.isArray(msg.p) || msg.p.length !== 3 || !msg.p.every(Number.isFinite)) return;
+    if (!this.weaponIn(msg.id, dh) || ap.hands[hand].pos.distanceTo(tp.head.pos) > 2.5 * (ap.scale + tp.scale)) return;
+    this._fx({ k: 'block', id: msg.id, dh, by: from, hand, p: msg.p.map(r3), v: r3(Math.min(Math.max(Number(msg.v) || 0, 0), 20)) });
   }
 
   _hostHold(from, msg) {
@@ -737,7 +830,14 @@ export class Session {
       };
     };
     for (const e of events) {
-      if (e.type === 'hit') {
+      if (e.type === 'armour') {
+        // the blow rang off a helmet or a chest plate; the last one it can take knocks it off, bent
+        const at = e.slot ? rig.torsoTop.clone().lerp(rig.torsoBottom, 0.4) : rig.head;
+        if (e.left === 0) this._shed(id, e.slot, pose, rig, ctx.dir, 3 + Math.min(ctx.push || 0, 3));
+        this._fx({ k: 'armour', id, slot: e.slot, left: e.left, p: arr(at), by: ctx.by || 0, hand: ctx.hand ?? -1 });
+        const bot = this.bots.get(id);
+        if (bot && ctx.dir) bot.knock(ctx.dir, Math.min(ctx.push || 1, 1.5));
+      } else if (e.type === 'hit') {
         const at = e.part === 'head' ? rig.head : e.part === 'torso' ? rig.torsoTop : (e.part.startsWith('fore') ? rig.wrist : rig.elbow)[e.part.endsWith('L') ? 0 : 1];
         this._fx({ k: 'hit', id, part: e.part, dmg: Math.round(e.dmg), p: arr(at), d: ctx.dir ? arr(ctx.dir) : [0, 0, 0], push: r3(ctx.push || 0), by: ctx.by || 0, hand: ctx.hand ?? -1, sharp: ctx.sharp ? 1 : 0, blunt: ctx.blunt ? 1 : 0 });
         const bot = this.bots.get(id);
@@ -771,6 +871,7 @@ export class Session {
         this._fx({ k: 'bisect', id, p: arr(rig.torsoTop.clone().lerp(rig.torsoBottom, 0.55)), d: ctx.dir ? arr(ctx.dir) : [0, 0, 0], by: ctx.by || 0 });
       } else if (e.type === 'die') {
         const body = this.body(id);
+        for (let slot = 0; slot < 2; slot++) if (body.armour[slot] > 0) { body.armour[slot] = 0; this._shed(id, slot, pose, rig, ctx.dir, 1.5); }   // the dead have no use for armour
         if (ctx.blast) {
           // blown to bits: every piece goes its own way
           const out = () => fling().addScaledVector(ctx.dir || DOWN, ctx.dir ? 4 : 0);
@@ -791,10 +892,20 @@ export class Session {
           // back from the dead: to the seats, unless it is up again already
           const T = this.tournament.state;
           this._seatBots(T.phase === 'prep' || T.phase === 'fight' ? T : null, id);
-        } else if (bot) bot.respawn();
+        } else if (bot) { bot.respawn(); this._kitOut(id); }
         this._fx({ k: 'respawn', id });
       }
     }
+  }
+
+  // A piece of armour comes off this body and lands as scrap.
+  _shed(id, slot, pose, rig, dir, speed) {
+    const type = SLOTS[slot], s = pose.scale;
+    const quat = (slot ? rig.rootQuat.clone() : pose.head.quat.clone().multiply(Y_FLIP));
+    const pos = new THREE.Vector3().fromArray(ARMOUR[type].worn).multiplyScalar(s).applyQuaternion(quat).add(pose.head.pos);
+    const vel = new THREE.Vector3((Math.random() - 0.5) * 2, 2 + Math.random() * 1.5, (Math.random() - 0.5) * 2);
+    if (dir) vel.addScaledVector(dir, speed);
+    this.props.spawn(type, pos, quat, { owner: 'scrap', vel, wounds: 1 });
   }
 
   // where the head and torso pieces sit for a body in this pose
@@ -893,7 +1004,7 @@ export class Session {
       if (d > 6) continue;
       const dir = pose.head.pos.clone().sub(at).setY(0.3).normalize(), ctx = { by: 0, dir, push: 3 * (1 - d / 6) };
       if (d < 3.5 && Math.random() < (d < 1.6 ? 1 : 0.5)) this._bodyEvents(id, body.sever(Math.random() < 0.5 ? 0 : 1, Math.random() < 0.5 ? 1 : 2), ctx);
-      this._bodyEvents(id, body.hit('torso', d < 1.6 ? 400 : 60 * (1 - d / 6)), { ...ctx, blast: d < 3 });
+      this._bodyEvents(id, body.hit('torso', d < 1.6 ? 400 : 60 * (1 - d / 6), { pierce: true }), { ...ctx, blast: d < 3 });
     }
   }
 
@@ -935,8 +1046,12 @@ export class Session {
     if (this.isAuthority) {
       const arena = this.settings.mode === 'arena', T = this.tournament.state;
       for (const [id, bot] of this.bots) {
-        const held = this.weaponIn(id, 1) || this.weaponIn(id, 0);
+        // what it has: a shield goes on the left arm and stays up; anything else it swings
+        const inHand = [this.weaponIn(id, 0), this.weaponIn(id, 1)];
+        const sh = inHand[0] && inHand[0].type.weapon.shield ? inHand[0] : null;
+        const held = inHand[1] || (sh ? null : inHand[0]);
         bot.weaponHand = held ? Number(held.held.key.split(':')[1]) : -1;
+        bot.shieldHand = sh ? 0 : -1;
         let brain = null;
         if (arena) {
           brain = { kind: 'still' };
@@ -949,7 +1064,15 @@ export class Session {
           }
         }
         bot.update(dt, this.body(id), this._pullerOf(id), brain);
+        // while it swings, see whether the blow runs into what its opponent is holding
+        if (bot.swing > 0 && !bot.caught && arena && this.rigs.has(id)) {
+          const foeId = T.a === id ? T.b : T.a, w = held && held.type.weapon, hp = bot.pose.hands[bot.weaponHand >= 0 ? bot.weaponHand : 1].pos;
+          const tip = w ? held.mesh.position.clone().add(new THREE.Vector3(0, w.hits[w.hits.length - 1][1], 0).applyQuaternion(held.mesh.quaternion)) : hp.clone();
+          bot.caught = this._caught(foeId, hp, tip, w ? w.r : RIG.handR) || (bot.lastTip ? this._caught(foeId, bot.lastTip, tip, w ? w.r : RIG.handR) : null);
+          bot.lastTip = tip;
+        }
         if (bot.strike) this._botStrike(id, held);
+        if (bot.swing <= 0) { bot.caught = null; bot.lastTip = null; }
         const p = this.players.get(id);
         if (p) p.state = packState(bot.pose);
       }
