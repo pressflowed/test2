@@ -2,7 +2,7 @@
 
 A VR tag game where you have no legs: you move by pushing off the world with your hands. It's built with WebXR and Three.js and made for Meta Quest. See [PLAN.md](PLAN.md) for the roadmap.
 
-**Current state: a breakable voxel world with three modes, solo or online: Sandbox, Hide and seek, and Arena (a knockout tournament with weapons, shields and armour in a colosseum). You have a real body: you can be hurt, lose arms or your head, bleed out and die, and your corpse flops to the ground as a ragdoll. You can also block.**
+**Current state: a voxel world with four modes, solo or online: Sandbox, Hide and seek, Arena (a knockout tournament with weapons, shields and armour in a colosseum) and Zombies (hold a ruined priory against waves of the dead, buying weapons and opening doors with the points you earn). You have a real body: you can be hurt, lose arms or your head, bleed out and die, and your corpse flops to the ground as a ragdoll. You can also block.**
 
 **Play:** https://pressflowed.github.io/test2/ (open it in the Meta Quest Browser and press Enter VR, or play on desktop)
 
@@ -22,7 +22,7 @@ WebXR only works from an `https://` address, so the game is hosted on GitHub Pag
 
 It connects you directly (WebRTC through PeerJS's free public server), so there's no server to run. The host runs the prop physics, so if the host leaves, the room closes.
 
-### Three modes
+### Four modes
 Pick one on the start menu, or on the **Game** tab of the arm menu. Anyone in the room can switch.
 
 - **Sandbox:** the original map. Spawn props, build, change your size, smash things, and fight (see *Bodies, blood and bots* below).
@@ -41,6 +41,18 @@ Pick one on the start menu, or on the **Game** tab of the arm menu. Anyone in th
   - You also lose if you stay off the sand for 15 seconds, or leave. If 90 seconds run out, whoever has more blood left wins.
   - Only the two fighters can hurt each other or pick anything up. Everyone is normal size, and nothing can be smashed.
   - The bracket is shown on boards over both gates, and on the Game tab. **New bracket** there starts the tournament again.
+- **Zombies:** hold out in Graywatch Priory for as many rounds as you can, alone or with friends. It runs by itself.
+  - **Rounds:** each round a set number of the dead come for you; put them all down and you get a breather before the next, bigger round. They get tougher and faster every round. It ends when everybody is dead at once; then it starts again. Alone, dying ends it. With friends, the fallen get back up when the round is over.
+  - **Points:** you start with 500. A blow that lands earns 10, a kill 60, taking a head off 100, and each board you put back on a window 10. Points buy everything.
+  - **Buying:** every sign shows a price. Put a hand on the sign (or stand in front of it and look at it) and **squeeze grip**. A weapon goes straight into the hand you reached with, replacing what was in it.
+  - **The map:** seven areas, all shut in. You start in the **chapel** (dagger 250, club 500). Doors cost 750 to 1500 and open the **graveyard** (sword, shield, spear), the **tavern** (bow, and the Ox Heart and Hare Foot tonics), the **smithy** (axe, war hammer, helmet, chest plate, the forge), the **crypt** (the mystery chest, Nine Lives), the **library** (greatsword, Bear Arm) and the **nave** (the spike trap). The two back doors make loops, so you can lead a crowd round in a circle.
+  - **Windows:** the dead climb out of the ground in pits outside and come in through the fourteen boarded-up windows of whichever areas are open, and out of the graves in the yard. They pull the boards off one at a time; **hold grip** at a broken window to put them back (not while one of them is at it).
+  - **The dead:** walkers shuffle, lurchers walk, runners (from round 4) jog, bombers (from round 6) run at you and blow up, and every fifth round brings a **brute**: half as big again, in a helmet and chest plate, and very hard to kill. They take the shortest way to the nearest living player, go round walls, and jump at you if you climb on something.
+  - **Tonics** (kegs with a coloured band): **Ox Heart** halves what blows do to you, **Hare Foot** makes you faster, **Bear Arm** makes your blows do 1.75 times as much, **Nine Lives** saves you from your next death. You lose them when you die.
+  - **The forge** (4000): hold a weapon to it and it comes out glowing, doing twice the harm. **The mystery chest** (950): a random weapon, sometimes already forged, sometimes a greatsword. **The spike trap** (1000): 22 seconds of spikes across the nave's aisle that kill anything dead that crosses.
+  - **What they leave behind:** now and then a glowing shape. Walk into it: **Death's Touch** (one blow kills, 30 s), **Double Points** (30 s), **Carpenter** (every window boarded up), **Holy Fire** (every one of them burns) or **Mend** (everyone whole again, quivers full).
+  - **The bow** (the only thing that shoots): hold it in one hand, **squeeze grip beside it with the other** to take the string, pull back, and let go. The further you draw, the faster and harder the arrow. 24 arrows; buying the bow again fills the quiver for a third of the price. Arrows stick in walls.
+  - Between rounds your arms grow back and your blood refills; your armour stays as dented as it was. Nothing in the priory can be smashed, and everyone is normal size.
 
 ### Voice chat
 - On the start menu, press **Turn on microphone** before you enter VR (the browser can only ask for permission there). Press it again to mute. In VR, the arm menu's **Game** tab has a mute button.
@@ -78,7 +90,8 @@ In the sandbox and the arena (hide and seek has no fighting). Everyone has a bod
 - **Shields:** a round shield, with the weapons. It sits on your fist and faces the way your knuckles point. It catches blows over its whole face, where a blade only catches what crosses it. You can shove it into someone, but it barely hurts.
 - **Armour:** a **helmet** and a **chest plate**. Squeeze grip on one and it is on (it does not stay in your hand). A blow to your head or body then rings off it and does nothing, but each one wears it down: a helmet stops 3 sword cuts, 2 hammer blows or 6 punches, a chest plate 4, 3 or 8. The last one **knocks it off**, and it lands on the ground dented and no use to anyone. Armour does not cover your arms, and it is no help against TNT.
 - **TNT** hurts everyone near it and can take arms off.
-- **Bots:** the **Game** tab of the arm menu has **Add bot** (up to 6), **Armoured bot** (the same, but in a helmet and chest plate and holding a shield up, to try blocking and armour on) and **Clear bots**. In the sandbox they are dummies: they hop around with no plan, flinch when hit, and hop away when you grab them (which is how their arms come off). They can always be hurt. (In the arena they fight back: they come at their opponent and swing.)
+- **How bots move and think:** bots get about the way you do, by planting a hand on the ground and pulling (the same physics as a player, so they lunge, hop and can be shoved). They find their way round walls and through doors. Sandbox dummies wander, watch you, and scramble away when hit or grabbed. Arena gladiators close in, keep to the edge of their reach, circle, strike, raise their shield when you swing, and back off when they are losing.
+- **Bots:** the **Game** tab of the arm menu has **Add bot** (up to 6), **Armoured bot** (the same, but in a helmet and chest plate and holding a shield up, to try blocking and armour on) and **Clear bots**. In the sandbox they are dummies: they wander about, flinch and run when hit, and pull away when you grab them (which is how their arms come off). They can always be hurt. (In the arena they fight back: they come at their opponent and swing.)
 - **Fighting** (Game tab) switches whether *players* can hurt each other. It is on to begin with. Turn it off to build in peace; TNT then only throws you around, as before.
 - Bodies and body pieces lie around for 80 seconds. They are ordinary props: grab them, throw them.
 
@@ -93,13 +106,13 @@ In the sandbox and the arena (hide and seek has no fighting). Everyone has a bod
 - **Left hand:** trigger deletes the prop nearest that hand. **Y** takes you back to the start.
 - **Grip (either hand):** grab a prop, or someone's arm; let go to throw it. A weapon stays in your hand: squeeze grip twice quickly to let go of it.
 
-Items: crate, ball, beach ball, barrel, cone, big crate, plank, platform, trampoline, TNT (explodes after 4 seconds), balloon (floats away), launch pad (flings you up), super ball, giant ball, domino, bowling pin, dice, tire, anvil, building pieces that stay where you put them (block, wall, pillar, beam), a table, and on the last pages six weapons, a shield, a helmet and a chest plate.
+Items: crate, ball, beach ball, barrel, cone, big crate, plank, platform, trampoline, TNT (explodes after 4 seconds), balloon (floats away), launch pad (flings you up), super ball, giant ball, domino, bowling pin, dice, tire, anvil, building pieces that stay where you put them (block, wall, pillar, beam), a table, and on the last pages the weapons (sword, axe, spear, club, war hammer, dagger, greatsword, bow), a shield, a helmet and a chest plate. In the sandbox the bow never runs out of arrows.
 
 ### On desktop (for testing without a headset)
 - Hold **left / right click** and drag the mouse down to push with that hand. **Space** uses both hands.
-- **J** punches whoever or whatever you are looking at (with the weapon you are holding, if any). **O** goes to the next mode. **K** skips to the next round, or draws a new bracket in the arena.
+- **J** punches whoever or whatever you are looking at (with the weapon you are holding, if any; with a bow, it shoots where you look). **O** goes to the next mode. **K** skips to the next round, or draws a new bracket in the arena.
 - **U** adds a bot, **9** adds an armoured one with a shield, **I** clears the bots, **Y** takes an arm off the bot you are looking at (a mouse cannot pull), **0** switches fighting between players on or off.
-- **F** throws the selected item where you look. The wheel or **1–8** pick an item; **,** and **.** change page. **V** quick-spawns, **G** (hold) grabs with the right hand (a weapon: **G** once to pick it up, **G** again to drop it; armour: **G** puts it on), **A** does the same with the left hand (for a shield), **X** deletes near it, **Z** undoes.
+- **F** throws the selected item where you look. The wheel or **1–8** pick an item; **,** and **.** change page. **V** quick-spawns, **G** (hold) grabs with the right hand (a weapon: **G** once to pick it up, **G** again to drop it; armour: **G** puts it on), **A** does the same with the left hand (for a shield), **X** deletes near it, **Z** undoes. In Zombies, **G** (or **A**) in front of a sign buys it, and held at a broken window boards it up.
 - **M** shows or hides the menu, **T** switches tab, **[ ]** change size, **- =** change power, **L** gravity, **N** sky, **H** smashing on/off, **Backspace** repairs the map, **P** prop rain, **B** balloons, **C** clear.
 - The mouse looks around. **Q / E** turn, **R** resets, **Esc** pauses.
 
@@ -112,6 +125,7 @@ node tests/smoke-browser.cjs        # loads the game in headless Chromium, runs 
 node tests/body-browser.cjs         # bots, punches, arms and heads coming off, ragdolls, weapons, bleeding out, dying and coming back
 node tests/arena-browser.cjs        # the colosseum: a whole tournament against bots, gates, weapons, forfeits
 node tests/guard-browser.cjs        # shields, blocking and armour, in the sandbox and against an arena bot
+node tests/zombies-browser.cjs      # the zombies mode: waves, windows, points, everything they buy, the bow, dying and starting again
 node tests/multiplayer-browser.cjs  # two browsers + a local PeerJS server: sync, voice (fake microphone), fighting, a full hide and seek round and an arena final
 npm run serve          # http://localhost:8000 for desktop testing
 ```
@@ -125,16 +139,20 @@ To change a surface texture, pick another file on [TextureTown](https://textures
 | `src/locomotion.js` | The arm-push movement. All the feel settings are in `DEFAULTS` at the top (`gripBrake` is how hard a still hand stops you). |
 | `src/voxels.js` | The breakable world: a grid of 25 cm blocks, dents, collapse, collision boxes |
 | `src/voxelmesh.js` | Draws the voxel world, one mesh per 8 m chunk, shaded under roofs |
-| `src/maps.js` | The three maps, built from blocks: the sandbox, Hollow Hamlet and the colosseum (`COLOSSEUM` says where its rooms, gates, weapon racks, shields, armour and seats are) |
+| `src/maps.js` | The four maps, built from blocks: the sandbox, Hollow Hamlet and the colosseum (`COLOSSEUM` says where its rooms, gates, weapon racks, shields, armour and seats are) and Graywatch Priory (`PRIORY`: its areas, doors, windows, graves and everything for sale, with prices) |
 | `src/rounds.js` | Hide and seek round rules (run by the host) |
 | `src/arena.js` | The arena tournament: bracket, phases and who wins (run by the host). The times are in `ARENA` at the top |
+| `src/zombies.js` | The zombies game's rules (run by the host): rounds, the kinds of dead, points, buying, windows, tonics, power-ups, the chest and the trap. The numbers are in `ZOMBIES`, `KINDS`, `TONICS` and `POWERUPS` at the top |
+| `src/zscene.js` | The parts of the priory that are not blocks: doors, boards, signs and what they sell, the chest, spikes, pick-ups and torches |
+| `src/nav.js` | How bots find their way: the map as a grid of half-metre squares, and "fields" that tell any number of bots which way to go at once |
+| `src/arrows.js` | Arrows in flight, and stuck in walls |
 | `src/weapons.js` | The weapons and the shield: damage, reach, how they sit in a fist, what they look like, and how a held one stops a blow (`guardOf`, `guardStops`). All in `WEAPONS` and `BLOCK` at the top |
 | `src/armour.js` | The helmet and the chest plate: what they look like, loose and worn. (How much they take is in `BODY` in `src/body.js`) |
 | `src/physics.js` | Collision helpers and the list of unbreakable boxes |
 | `src/avatar.js` | The body you see: head follows the headset, IK arms, how the hand sits on the controller, and how wounds and missing arms are shown |
 | `src/body.js` | The rules for a body: blood, bleeding, arms and heads coming off, dying and coming back. All the numbers are in `BODY` at the top |
 | `src/bodyrig.js` | Where a body's joints are, and what a punch or a grab touched |
-| `src/bots.js` | The bots: sandbox dummies, and arena gladiators that come at you and swing |
+| `src/bots.js` | The bots: how they pull themselves along with their hands (`GAITS`), and what each kind decides to do (dummy, gladiator, zombie) |
 | `src/gibs.js` | Body pieces (they are props): loose ones, and the jointed parts of a dead body |
 | `src/input-vr.js` / `src/input-desktop.js` | Headset + controllers / mouse + keyboard |
 | `src/props.js` | Physics props (cannon-es): types, spawning, grabbing, syncing, and the joints that hold a dead body together |

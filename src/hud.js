@@ -37,6 +37,7 @@ export class Hud {
     this.blood = null;        // null hides the bar; otherwise { value, max, bleeding }
     this.title = ''; this.sub = ''; this.until = 0; this.color = '#f4eed6';
     this.status = '';
+    this.hint = '';           // a line near the bottom: what you could do here (buy this, mend that)
     this.blind = false;
     this._key = '';
     this._pos = new THREE.Vector3();
@@ -79,10 +80,10 @@ export class Hud {
     const showing = now < this.until;
     const fade = showing ? Math.min(1, (this.until - now) / 400) : 0;
     const b = this.blood;
-    const key = [showing ? this.title + '|' + this.sub + '|' + this.color : '', this.status, b ? `${Math.round(b.value)}/${b.max}/${b.bleeding ? Math.floor(now / 350) % 2 : 0}` : ''].join('~');
+    const key = [showing ? this.title + '|' + this.sub + '|' + this.color : '', this.status, this.hint, b ? `${Math.round(b.value)}/${b.max}/${b.bleeding ? Math.floor(now / 350) % 2 : 0}` : ''].join('~');
     if (key !== this._key) { this._key = key; this._draw(showing); }
-    this.sprite.visible = showing || !!this.status || !!b;
-    this.sprite.material.opacity = showing ? Math.max(fade, this.status || b ? 1 : 0) : 1;
+    this.sprite.visible = showing || !!this.status || !!this.hint || !!b;
+    this.sprite.material.opacity = showing ? Math.max(fade, this.status || this.hint || b ? 1 : 0) : 1;
 
     this.pain = Math.max(0, this.pain - dt * 1.8);
     this.red.visible = this.pain > 0.01;
@@ -117,7 +118,7 @@ export class Hud {
       g.lineWidth = size * 0.16; g.strokeStyle = 'rgba(8,16,11,.9)'; g.lineJoin = 'round';
       g.strokeText(t, 512, y); g.fillStyle = color; g.fillText(t, 512, y);
     };
-    if (this.status) text(this.status, 70, 64, '#e7efd6');
+    if (this.status) text(this.status, 70, Math.max(30, Math.min(64, Math.floor(1800 / this.status.length))), '#e7efd6');      // (smaller when there is a lot to say, so it all fits)
     const b = this.blood;
     if (b) {
       // blood bar along the bottom; it blinks while you are bleeding
@@ -128,6 +129,7 @@ export class Hud {
       g.fillStyle = b.bleeding && Math.floor(performance.now() / 350) % 2 ? '#ff5a4a' : '#c81e1e'; g.fillRect(x, y, w * Math.max(b.value, 0) / 100, h);
       text(b.bleeding ? 'BLEEDING' : 'BLOOD', y + h / 2 + 2, 28, '#f4eed6');      // written on the bar, clear of any message above it
     }
+    if (this.hint && !(showing && this.sub)) text(this.hint, 380, Math.max(28, Math.min(46, Math.floor(1700 / this.hint.length))), '#ffd76a');
     if (showing) {
       text(this.title, 260, this.title.length > 16 ? 84 : 118, this.color);
       if (this.sub) text(this.sub, 380, this.sub.length > 40 ? 40 : 50, '#f4eed6');

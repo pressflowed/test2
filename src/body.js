@@ -50,6 +50,20 @@ export class Body {
     this.armour = [0, 0];         // what is left of the helmet and the chest plate (0: not wearing one)
   }
 
+  /** Made whole again, but not a new body: the blood on it and the armour it has on stay. */
+  heal() {
+    if (this.dead) return;
+    const armour = this.armour;
+    this.reset();
+    this.armour = armour;
+  }
+  /** Not dead after all (Nine Lives): whole, alive, and still in its armour. */
+  revive() {
+    const armour = this.armour;
+    this.reset();
+    this.armour = armour;
+  }
+
   /** Put on a helmet (slot 0) or a chest plate (slot 1). Returns false if one is already on. */
   wear(slot) {
     if (this.dead || !(slot === 0 || slot === 1) || this.armour[slot] > 0) return false;

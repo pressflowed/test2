@@ -15,7 +15,7 @@ const types = ev => ev.map(e => e.type);
 
 test('a shield is a weapon you can spawn, but it is not handed out as one', () => {
   assert.ok(WEAPONS.shield.shield >= 0.3);
-  assert.ok(!ARMS.includes('shield') && ARMS.length === Object.keys(WEAPONS).length - 1);
+  assert.ok(!ARMS.includes('shield') && !ARMS.includes('bow') && ARMS.length === 6);
   for (const id of ['shield', 'helmet', 'chestplate']) assert.ok(SPAWNABLE.some(t => t.id === id), id);
   assert.ok(PROP_TYPES.find(t => t.id === 'helmet').armour && PROP_TYPES.find(t => t.id === 'shield').weapon);
 });

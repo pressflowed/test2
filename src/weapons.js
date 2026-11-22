@@ -19,9 +19,13 @@ export const WEAPONS = {
   hammer: { label: 'War hammer', size: [0.3, 0.95, 0.16], mass: 5.5, dmg: 42, sharp: false, knock: 2.6, hilt: -0.33, hits: [[0, 0.38]], r: 0.13 },
   dagger: { label: 'Dagger', size: [0.1, 0.42, 0.05], mass: 0.8, dmg: 20, sharp: true, knock: 0.7, hilt: -0.13, hits: [[0, 0.04], [0, 0.17]], r: 0.045 },
   shield: { label: 'Shield', size: [0.1, 0.68, 0.68], mass: 3.5, dmg: 16, sharp: false, knock: 2.4, hilt: 0, fwd: 0.07, hits: [[0, 0]], r: 0.26, shield: 0.34 },
+  greatsword: { label: 'Greatsword', size: [0.24, 1.5, 0.06], mass: 4.5, dmg: 56, sharp: true, knock: 1.6, hilt: -0.56, hits: [[0, 0.05], [0, 0.36], [0, 0.66]], r: 0.06 },
+  // a bow shoots arrows (see arrows.js): `bow` is how fast a full draw sends one (m/s), what it does to
+  // whoever it hits, and how far back the string comes (m). It faces the way the knuckles point, like a shield.
+  bow: { label: 'Bow', size: [0.2, 1.24, 0.06], mass: 0.9, dmg: 8, sharp: false, knock: 0.5, hilt: 0, fwd: 0, hits: [[0, 0.5]], r: 0.04, bow: { speed: 36, dmg: 48, draw: 0.5 } },
 };
-/** The ones you hit people with (a shield can be shoved into someone, but that is not what it is for). */
-export const ARMS = Object.keys(WEAPONS).filter(id => !WEAPONS[id].shield);
+/** The ones that hang in the arena: what you hit people with at arm's length. */
+export const ARMS = ['sword', 'axe', 'spear', 'club', 'hammer', 'dagger'];
 /** How fast (m/s, at normal size) the business end must be moving to hurt. */
 export const SWING = { min: 2, full: 6 };
 /** Damage for a swing at speed v by a player of size s. */
@@ -38,7 +42,7 @@ const KNUCKLES = new THREE.Vector3(0, -1, 0), THUMB = new THREE.Vector3(0, 0, -1
 const SHIELD_ROT = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(KNUCKLES, THUMB, new THREE.Vector3().crossVectors(KNUCKLES, THUMB)));
 /** Where a held weapon sits relative to the hand: { offset, rot }. */
 export function weaponHold(w) {
-  if (w.shield) return { offset: KNUCKLES.clone().multiplyScalar(w.fwd || 0), rot: SHIELD_ROT.clone() };
+  if (w.shield || w.bow) return { offset: KNUCKLES.clone().multiplyScalar(w.fwd || 0), rot: SHIELD_ROT.clone() };
   return { offset: BLADE.clone().multiplyScalar(-w.hilt), rot: HOLD_ROT.clone() };
 }
 
@@ -102,6 +106,7 @@ export function guardStops(g, p0, p1, r = 0) {
 // ---- looks
 export const STEEL = 0xcfd6dc, IRON = 0x5d646b, WOOD = 0x7a5230, DARK = 0x4a2f1c, GOLD = 0xd4a73a;
 const material = new THREE.MeshLambertMaterial({ vertexColors: true });
+const forgedMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, emissive: 0x6a3a00 });
 const cache = {};
 
 export function paint(g, hex) {
@@ -138,6 +143,22 @@ const BUILD = {
     rod(0.016, 0.016, -0.21, -0.07, DARK), box(0.1, 0.022, 0.035, 0, -0.06, 0, GOLD),
     box(0.04, 0.2, 0.012, 0, 0.05, 0, STEEL), paint(new THREE.CylinderGeometry(0, 0.028, 0.06, 4).rotateY(Math.PI / 4).scale(1, 1, 0.3).translate(0, 0.18, 0), STEEL),
   ],
+  greatsword: () => [
+    rod(0.036, 0.036, -0.75, -0.7, GOLD, 6), rod(0.02, 0.02, -0.71, -0.42, DARK), box(0.24, 0.036, 0.05, 0, -0.4, 0, GOLD),
+    box(0.075, 1.02, 0.016, 0, 0.13, 0, STEEL), box(0.02, 0.9, 0.022, 0, 0.1, 0, IRON),
+    paint(new THREE.CylinderGeometry(0, 0.053, 0.11, 4).rotateY(Math.PI / 4).scale(1, 1, 0.22).translate(0, 0.695, 0), STEEL),
+  ],
+  // a bow: the grip in the middle, two limbs bending back toward the archer (-X), and the string
+  bow: () => {
+    const limb = (y0, x0, y1, x1, r, c) => {
+      const len = Math.hypot(y1 - y0, x1 - x0);
+      return paint(new THREE.CylinderGeometry(r, r, len, 6).rotateZ(-Math.atan2(x1 - x0, y1 - y0)).translate((x0 + x1) / 2, (y0 + y1) / 2, 0), c);
+    };
+    const parts = [rod(0.02, 0.02, -0.09, 0.09, DARK, 6)];
+    for (const s of [-1, 1]) parts.push(limb(s * 0.09, 0, s * 0.34, 0.03, 0.016, WOOD), limb(s * 0.34, 0.03, s * 0.54, -0.03, 0.013, WOOD), limb(s * 0.54, -0.03, s * 0.62, -0.1, 0.01, WOOD));
+    parts.push(limb(-0.62, -0.1, 0.62, -0.1, 0.004, 0xe8e2cc));
+    return parts;
+  },
   // a round wooden shield: its face looks along +X, the hand grips a bar behind the boss
   shield: () => {
     const disc = (r, x0, x1, c, sides = 16) => paint(new THREE.CylinderGeometry(r, r, x1 - x0, sides).rotateZ(-Math.PI / 2).translate((x0 + x1) / 2, 0, 0), c);
@@ -157,9 +178,19 @@ const BUILD = {
  * it there is on the business end: a weapon gets redder each time it is used on someone.
  */
 export const MAX_BLOOD = 3;
-export function weaponVisual(id, blood = 0) {
+export function weaponVisual(id, blood = 0, forged = false) {
   blood = Math.min(Math.max(blood | 0, 0), MAX_BLOOD);
-  const key = id + ':' + blood;
+  const key = id + ':' + blood + (forged ? ':f' : '');
+  if (!cache[key] && forged) {
+    // the same weapon out of the forge: its steel glows like hot gold
+    const geo = weaponVisual(id, blood).geo.clone(), c = geo.attributes.color, hot = new THREE.Color(0xffb020), steel = new THREE.Color(STEEL), iron = new THREE.Color(IRON), col = new THREE.Color();
+    for (let i = 0; i < c.count; i++) {
+      col.setRGB(c.getX(i), c.getY(i), c.getZ(i));
+      const metal = Math.max(0, 1 - Math.min(Math.hypot(col.r - steel.r, col.g - steel.g, col.b - steel.b), Math.hypot(col.r - iron.r, col.g - iron.g, col.b - iron.b)) * 4);
+      c.setXYZ(i, col.r + (hot.r - col.r) * metal * 0.8, col.g + (hot.g - col.g) * metal * 0.8, col.b + (hot.b - col.b) * metal * 0.8);
+    }
+    cache[key] = { geo, mat: forgedMaterial };
+  }
   if (!cache[key]) {
     if (blood === 0) {
       const parts = BUILD[id]();

@@ -7,7 +7,7 @@ import { Locomotion } from './locomotion.js';
 import { Avatar, SKIN, fingertip } from './avatar.js';
 import { DesktopInput } from './input-desktop.js';
 import { VRInput } from './input-vr.js';
-import { initAudio, tap, boom, boing, crunch, jingle, thump, heartbeat, smack, tear, squelch, crack, clang } from './audio.js';
+import { initAudio, tap, boom, boing, crunch, jingle, thump, heartbeat, smack, tear, squelch, crack, clang, groan, twang } from './audio.js';
 import { Voice } from './voice.js';
 import { buildScenery, lightButton } from './sandbox.js';
 import { SPAWNABLE, propVisual, propSize, BLAST_RADIUS, weaponHold } from './props.js';
@@ -30,6 +30,8 @@ import { MAPS, COLOSSEUM } from './maps.js';
 import { ROUND } from './rounds.js';
 import { Hud } from './hud.js';
 import { loadTextures } from './textures.js';
+import { PRIORY } from './maps.js';
+import { ZOMBIES, TONICS, POWERUPS, KINDS, within } from './zombies.js';
 
 const $ = id => document.getElementById(id);
 const canvas = $('view');
@@ -136,7 +138,7 @@ let jumps = 0;                   // how many times the movement code has telepor
 let calmUntil = 0;               // no punch or swing counts until this time (ms): I have just been moved
 // what blood and bits land on: the ground, and the walls and ceilings of the block world
 const bloodWorld = { grid: VOXEL, groundAt: (x, y, z) => Math.max(0, voxels.groundBelow(x, y, z)), solidAt: (x, y, z) => voxels.solidAt(x, y, z) };
-const MODES = ['sandbox', 'hideseek', 'arena'];
+const MODES = ['sandbox', 'hideseek', 'arena', 'zombies'];
 // How much damage a punch does to someone my own size: harder with speed, much harder if I am big.
 const punchPower = (v, s) => Math.min(Math.max((v - 1.5) * 9, 6), 60) * s ** 1.5;
 
@@ -151,6 +153,7 @@ function respawn() {
     desktop.yaw = 0;
     return;
   }
+  if (session.settings.mode === 'zombies') { desktop.yaw = 0; desktop.pitch = -0.1; }
   const at = role === 'giant' ? map.giantSpawn : map.spawn;
   const a = Math.random() * Math.PI * 2, r = 0.6 + Math.random() * 1.4;
   loco.teleport(new THREE.Vector3(at[0] + Math.cos(a) * r, at[1], at[2] + Math.sin(a) * r * 0.5), 0);
@@ -173,15 +176,17 @@ function applyView() {
   rig.scale.setScalar(s);
   // fog and draw distance are measured in "player units", so adjust them for size
   scene.fog.near = 35 / s; scene.fog.far = p.fogFar / s;
+  if (session.settings.mode === 'zombies') { scene.fog.near = 9; scene.fog.far = 46; }       // the priory is a murky place
   camera.far = 260 / Math.min(s, 1);
   camera.updateProjectionMatrix();
 }
 // Your size and power come from the arm menu, unless a hide and seek round gives you a role.
 function applySizing() {
   const role = session.role();
-  const plain = role === 'ghost' || role === 'fighter' || role === 'spectator';     // everyone is the same size in the arena
+  const zomb = role === 'survivor' || role === 'fallen', mine = session.zombies.pl[session.myId];
+  const plain = role === 'ghost' || role === 'fighter' || role === 'spectator' || zomb;     // everyone is the same size in the arena and the priory
   const scale = role === 'giant' ? ROUND.giantScale : role === 'hider' ? ROUND.hiderScale : plain ? 1 : SIZES[sizeIdx];
-  loco.power = role === 'giant' ? ROUND.giantPower : role === 'hider' ? ROUND.hiderPower : plain ? 1 : POWERS[powerIdx];
+  loco.power = role === 'giant' ? ROUND.giantPower : role === 'hider' ? ROUND.hiderPower : zomb && mine && (mine[1] & TONICS.hare.bit) ? 1.35 : plain ? 1 : POWERS[powerIdx];
   if (loco.scale !== scale) { loco.setScale(scale, headLocal); applyView(); }
 }
 function setSize(i) {
@@ -282,7 +287,9 @@ function renderRoom() {
     ? (session.playerCount < 2 ? 'Hide and seek starts when a second player joins. You can explore the map until then.' : 'Rounds run by themselves: one giant, everyone else hides.')
     : session.settings.mode === 'arena'
       ? 'A knockout tournament in a colosseum. Two fighters at a time pick weapons in their own rooms, then the gates open. Bots fill in if you are alone.'
-      : 'Build, spawn props, smash things and fight freely.';
+      : session.settings.mode === 'zombies'
+        ? 'Hold a ruined priory against waves of the dead, alone or together. Points from blows and kills buy weapons, armour and doors.'
+        : 'Build, spawn props, smash things and fight freely.';
 }
 session.onChange = () => { renderRoom(); voice.sync(session.peers); };
 voice.onChange = renderRoom;
@@ -303,11 +310,68 @@ session.onBleed = (pos, dir, spurt, sc = 1) => {
   if (spurt) blood.spray(pos, dir, 16, 2.8 * Math.sqrt(sc), 0.02 * sc, 0.3);
   else blood.spray(pos, null, 2, 0.7, 0.016 * sc);
 };
+// Things that happen in the zombies game. Returns true if it was one of them.
+function zombieFx(e) {
+  const at = e.p ? new THREE.Vector3().fromArray(e.p) : null, vol = at ? Math.min(1, 5 / (at.distanceTo(loco.head) + 3)) : 1, mine = e.by === session.myId;
+  const g = GRAVITY[session.settings.gravity];
+  if (e.k === 'rise') {
+    // one of them comes up out of the ground: earth flies, and it moans
+    debris.burst(Array.from({ length: 10 }, () => [at.x + (Math.random() - 0.5) * 0.8, at.y + 0.1, at.z + (Math.random() - 0.5) * 0.8, 0x4a3323]), at, 0.09, g);
+    groan(vol * 0.8, e.kind === 'brute' ? 1 : 0);
+    if (e.kind === 'brute') hud.flash('A brute!', 'It is in armour. Knock that off first', 3, '#ff5a4a');
+  } else if (e.k === 'tear') {
+    crack(vol); crunch('plank', vol * 0.8);
+    debris.burst(Array.from({ length: 6 }, () => [at.x + (Math.random() - 0.5) * 0.8, at.y + (Math.random() - 0.5), at.z + (Math.random() - 0.5) * 0.8, 0x7a5a33]), at, 0.08, g);
+  } else if (e.k === 'board') {
+    tap('plank', vol, 0); crack(vol * 0.4);
+  } else if (e.k === 'buy') {
+    if (e.kind === 'door') { crunch('wood', vol); thump(vol * 0.6); if (!mine) hud.flash('A door is open', `${session.nameOf(e.by)} opened it`, 2.5); }
+    if (e.kind === 'forge') { clang(vol, 0.3); sparks(at, 14); }
+    if (!mine) return true;
+    jingle([784, 988, 1175], 0.6);
+    const shop = PRIORY.shops.find(x => x.id === e.what);
+    if (e.kind === 'weapon') { stuck[e.hand ? 1 : 0] = true; tipHist[e.hand ? 1 : 0].length = 0; hud.flash(heldWeaponLabel(e.item), e.item === 'bow' ? (renderer.xr.isPresenting ? `${ZOMBIES.arrows} arrows. Squeeze grip beside it with your other hand, pull back, let go` : `${ZOMBIES.arrows} arrows. J shoots where you look`) : 'It is in your hand', 4, '#ffd76a'); calmUntil = performance.now() + 400; }
+    else if (e.kind === 'arrows') hud.flash('A full quiver', `${ZOMBIES.arrows} arrows`, 2, '#ffd76a');
+    else if (e.kind === 'tonic') hud.flash(TONICS[e.item].label, TONICS[e.item].text, 4, '#ffd76a');
+    else if (e.kind === 'door') hud.flash('The door opens', 'More room: and more ways in for them', 3, '#ffd76a');
+    else if (e.kind === 'forge') hud.flash('Forged!', 'It does twice the harm now', 3, '#ffd76a');
+    else if (e.kind === 'chest') hud.flash('The chest opens...', '', 2.5, '#ffd76a');
+    else if (e.kind === 'trap') hud.flash('The spikes are up', 'Lead them over it', 3, '#ffd76a');
+    else if (e.kind === 'armour' && shop) hud.flash(`${shop.item === 'helmet' ? 'Helmet' : 'Chest plate'} on`, '', 2.5, '#ffd76a');
+  } else if (e.k === 'nobuy') {
+    hud.flash(e.why, '', 1.4, '#ff5a4a');
+    tap('metal', 0.5, 0);
+  } else if (e.k === 'power') {
+    const P = POWERUPS[e.kind];
+    hud.flash(P.label, P.text, 3.5, '#' + P.color.toString(16).padStart(6, '0'));
+    jingle([523, 659, 784, 1047], 0.7);
+    if (e.kind === 'fire') boom(0.5);
+  } else if (e.k === 'drop') {
+    jingle([880, 1175], 0.4 * vol);
+  } else if (e.k === 'ash') {
+    // burnt up where it stood
+    debris.burst(Array.from({ length: 14 }, () => [at.x + (Math.random() - 0.5) * 0.4, at.y + (Math.random() - 0.5) * 0.6, at.z + (Math.random() - 0.5) * 0.4, [0xff7a2f, 0xffc04a, 0x2a2a2a][Math.floor(Math.random() * 3)]]), at, 0.07, g * 0.3);
+    blood.spray(at, null, 30, 2.5, 0.02);
+  } else if (e.k === 'saved') {
+    if (e.id === session.myId) { hud.flash('Nine Lives!', 'That one did not count. You have no more', 4, '#c9a2ff'); jingle([392, 523, 784]); hud.hurt(0.8); }
+  } else if (e.k === 'arrow') {
+    if (!session.isAuthority) session.arrows.shoot(e.a, new THREE.Vector3().fromArray(e.o), new THREE.Vector3().fromArray(e.v), e.by);
+    if (!mine) twang(vol * 0.6);
+  } else if (e.k === 'arrowhit') {
+    session.arrows.remove(e.a);
+  } else if (e.k === 'respawn') {
+    return true;
+  } else return false;
+  return true;
+}
+const heldWeaponLabel = id => ({ sword: 'Sword', axe: 'Axe', spear: 'Spear', club: 'Club', hammer: 'War hammer', dagger: 'Dagger', shield: 'Shield', greatsword: 'Greatsword', bow: 'Bow' })[id] || id;
+
 // sparks where metal meets metal
 function sparks(p, n = 8) {
   debris.burst(Array.from({ length: n }, () => [p.x + (Math.random() - 0.5) * 0.06, p.y + (Math.random() - 0.5) * 0.06, p.z + (Math.random() - 0.5) * 0.06, [0xfff2a8, 0xffd060, 0xffffff][Math.floor(Math.random() * 3)]]), p, 0.022, GRAVITY[session.settings.gravity]);
 }
 session.onBodyFx = e => {
+  if (zombieFx(e)) return;
   if (e.k === 'wear') {
     if (e.id === session.myId) {
       hud.flash(`${ARMOUR[SLOTS[e.slot]].label} on`, e.slot ? 'It takes the blows to your body, until it is knocked off' : 'It takes the blows to your head, until it is knocked off', 3.5);
@@ -390,7 +454,7 @@ session.onBodyFx = e => {
       if (close) hud.splatter(6);
     }
     smack(vol);
-    if (!mine && (by || !session.isBot(e.id))) hud.flash(by ? `You killed ${session.nameOf(e.id)}` : `${session.nameOf(e.id)} died`, '', 2.5);
+    if (!mine && !session.isBot(e.id)) hud.flash(by ? `You killed ${session.nameOf(e.id)}` : `${session.nameOf(e.id)} died`, '', 2.5);      // (only for people: nobody needs telling each time a bot goes down)
   } else if (e.k === 'grab' && mine) {
     hud.flash(`${session.nameOf(e.by)} has your arm!`, 'It tears off if it is pulled too far', 3, red);
     for (let i = 0; i < 2; i++) vr.pulse(i, 0.8, 200);
@@ -399,10 +463,8 @@ session.onBodyFx = e => {
     const hard = Math.min((e.v || 3) / 7, 1), held = session.weaponIn(e.id, e.dh), shield = !!(held && held.type.weapon.shield);
     clang(vol * (0.5 + 0.5 * hard), shield ? 0.8 : 0.1);
     sparks(p, 4 + Math.round(hard * 8));
-    if (mine) {
-      vr.pulse(e.dh, 0.6 + 0.4 * hard, 160);
-      if (blockTips-- > 0) hud.flash('Blocked!', shield ? 'Your shield took that' : 'You caught that on your weapon', 1.6, '#9bd0ff');
-    } else if (by) hud.flash('Blocked', '', 0.9);
+    stats.blocks = (stats.blocks || 0) + 1;
+    if (mine) vr.pulse(e.dh, 0.6 + 0.4 * hard, 160);        // heard and felt, not announced
   } else if (e.k === 'armour') {
     // a blow rang off armour; the last one it can take sends it flying
     const piece = ARMOUR[SLOTS[e.slot]].label, off = e.left === 0;
@@ -410,15 +472,12 @@ session.onBodyFx = e => {
     sparks(p, off ? 12 : 6);
     if (mine) {
       hud.hurt(0.15);
-      hud.flash(off ? `${piece} knocked off!` : `${piece} took that`, off ? '' : 'It will not last for ever', off ? 3 : 1.4, off ? red : '#9bd0ff');
+      if (off) hud.flash(`${piece} knocked off!`, '', 3, red);          // (losing a piece of your own is the one thing here worth words)
       for (let i = 0; i < 2; i++) vr.pulse(i, off ? 1 : 0.6, off ? 220 : 110);
-    } else if (by) {
-      vr.pulse(e.hand >= 0 ? e.hand : 1, 0.8, 110);
-      hud.flash(off ? `${piece} knocked off` : 'Armour', off ? `${session.nameOf(e.id)} has lost it` : 'Hit somewhere it does not cover, or keep at it', off ? 2.5 : 1.4);
-    }
+    } else if (by) vr.pulse(e.hand >= 0 ? e.hand : 1, 0.8, 110);
   }
 };
-let blockTips = 3;               // how many more times to say what just happened when I block
+
 // the arena tournament moved on: gates, the board, where I should be, and what to tell me
 function arenaLine(st) {
   const n = id => session.nameOf(id);
@@ -461,6 +520,31 @@ session.onArena = (st, prev) => {
     // fireworks over the arena
     for (let k = 0; k < 6; k++) setTimeout(() => { if (session.settings.mode === 'arena') blasts.add(new THREE.Vector3((Math.random() - 0.5) * 18, 9 + Math.random() * 5, (Math.random() - 0.5) * 18), 3 + Math.random() * 3); }, k * 450);
   } else if (st.phase === 'waiting' && prev.phase !== 'waiting') hud.flash('Waiting for fighters', 'The arena needs two', 4);
+};
+// the zombies game moved on: doors and windows, and what to tell me
+session.onZombies = (st, prev) => {
+  level.setPriory(st);
+  if (session.settings.mode !== 'zombies') return;
+  const me = st.pl[session.myId], was = prev.pl[session.myId], gold = '#ffd76a', red = '#ff5a4a';
+  if (me && was && me[1] !== was[1]) applySizing();          // a tonic bought (or lost)
+  if (st.phase !== prev.phase || st.round !== prev.round) {
+    if (st.phase === 'intro') {
+      applySizing(); respawn(); blood.clear();
+      hud.flash('ZOMBIES', 'Hold out as long as you can. Points buy weapons and open doors', 6, red);
+      jingle([196, 185, 174, 131]);
+    } else if (st.phase === 'round') {
+      hud.flash(`ROUND ${st.round}`, st.round === 1 ? 'They come through the windows. Board them up, and hit hard' : st.round % 5 === 0 ? 'Something big is coming' : '', 4, red);
+      jingle([131, 156, 131, 98]);
+      for (let i = 0; i < 2; i++) vr.pulse(i, 0.8, 200);
+    } else if (st.phase === 'break') {
+      hud.flash(`Round ${st.round} survived`, 'Catch your breath: mend the windows, spend your points', 4, '#9be15d');
+      jingle([392, 523, 659]);
+    } else if (st.phase === 'over') {
+      hud.flash('GAME OVER', `You lasted ${st.round} round${st.round === 1 ? '' : 's'}  ·  ${st.kills} put down${st.best > 0 ? `  ·  best: ${st.best}` : ''}`, 12, red);
+      jingle([262, 247, 233, 196, 131]);
+    }
+  }
+  // doors opening and windows mended or broken make themselves heard through their own messages (see onBodyFx)
 };
 session.onMap = mode => {
   level.setMap(mode);
@@ -651,6 +735,23 @@ function heldWeapon(i) {
 }
 
 // My hands against other bodies: a fast hand (or weapon) landing on someone hurts them.
+// the priory: what is in reach to buy or mend; and the bow
+let zNear = null, lastBuy = 0, lastMend = 0, lastShot = 0;
+let nock = null;                 // { hand, pull (0..1) } while my other hand has the bowstring
+const nockArrow = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.72, 5).rotateX(Math.PI / 2), new THREE.MeshLambertMaterial({ color: 0x7a5230 }));
+nockArrow.visible = false;
+scene.add(nockArrow);
+// Loose an arrow from the bow in `hand`, the way `dir` points; `power` (0..1) is how far it was drawn.
+function loose(hand, origin, dir, power) {
+  const bow = heldWeapon(hand);
+  if (!bow || !bow.type.weapon.bow) return false;
+  if (session.quiver <= 0) { hud.flash('No arrows', session.settings.mode === 'zombies' ? 'Buy more where you got the bow' : '', 1.5); return false; }
+  session.shoot(hand, origin, dir.clone().multiplyScalar(bow.type.weapon.bow.speed * (0.25 + 0.75 * power)), power);
+  twang(0.5 + 0.5 * power);
+  vr.pulse(hand, 0.8, 70);
+  return true;
+}
+
 // Has this blow of mine run into what somebody is holding? `from` to `to` is the thing itself
 // (hand to tip), `was` where its far end was a frame ago. A blow that does cannot hurt them
 // for a moment; if it was going at any speed, everyone hears it and we both feel it.
@@ -777,6 +878,11 @@ function punchAhead() {
   const hand = armed(1) ? 1 : armed(0) ? 0 : bare(1) ? 1 : bare(0) ? 0 : mine.canUse(1) ? 1 : mine.canUse(0) ? 0 : -1;
   if (hand < 0) return;
   const wp = heldWeapon(hand), w = wp && wp.type.weapon;
+  if (w && w.bow) {
+    const now = performance.now();
+    if (now - lastShot > 550) { lastShot = now; loose(hand, localPose.head.pos.clone().addScaledVector(dir, 0.45 * s).add(new THREE.Vector3(0, -0.12 * s, 0)), dir, 0.9); }
+    return;
+  }
   desktop.swing(hand);
   if (session.settings.mode !== 'hideseek') {
     const p = new THREE.Vector3(), reach = 1.7 * s + (w ? w.hits[w.hits.length - 1][1] - w.hilt : 0);
@@ -818,6 +924,15 @@ function roundStatus() {
     if (st.phase === 'champion') return `Champion: ${n(st.champion)}  ·  next tournament in ${st.t}`;
     return '';
   }
+  if (session.settings.mode === 'zombies') {
+    const st = session.zombies, me = st.pl[session.myId], pts = me ? `  ·  ${me[0]} points` : '';
+    const pow = `${st.pow[0] ? `  ·  Death's Touch ${st.pow[0]}` : ''}${st.pow[1] ? `  ·  Double points ${st.pow[1]}` : ''}`;
+    if (st.phase === 'intro') return `They are coming in ${st.t}${pts}`;
+    if (st.phase === 'round') return `Round ${st.round}  ·  ${st.left} left${pts}${pow}${me && me[4] ? `  ·  ${me[4]} arrows` : ''}`;
+    if (st.phase === 'break') return `Round ${st.round + 1} in ${st.t}${pts}`;
+    if (st.phase === 'over') return `Game over: round ${st.round}  ·  again in ${st.t}`;
+    return '';
+  }
   if (session.settings.mode !== 'hideseek') return '';
   const r = session.round, role = session.role();
   if (r.phase === 'waiting') return 'Hide and seek: waiting for another player';
@@ -834,6 +949,11 @@ function gameLines() {
     if (st.phase === 'champion') return [title, `Champion: ${n(st.champion)}`];
     if (st.a == null) return [title, `Starts in ${st.t}`];
     return [title, `${n(st.a)} vs ${n(st.b)}`, arenaLine(st)];
+  }
+  if (session.settings.mode === 'zombies') {
+    const st = session.zombies, me = st.pl[session.myId];
+    const tonics = me ? Object.values(TONICS).filter(t => me[1] & t.bit).map(t => t.label).join(', ') : '';
+    return [st.phase === 'over' ? `Game over at round ${st.round}` : st.round ? `Round ${st.round}: ${st.left} left` : 'Zombies', me ? `${me[0]} points  ·  ${me[2]} kills${st.best ? `  ·  best: round ${st.best}` : ''}` : '', tonics || 'Squeeze grip on a sign to buy it.'];
   }
   if (session.settings.mode !== 'hideseek') return ['Punch, grab and pull arms. Bots are for practice.'];
   const r = session.round;
@@ -897,15 +1017,18 @@ renderer.setAnimationLoop((time, frame) => {
   const mode = session.settings.mode;
   const tools = mode === 'sandbox';                       // spawning and deleting are sandbox-only
   const role = session.role();
-  const hands = tools || role === 'fighter';              // may pick things up
-  const combat = tools || (role === 'fighter' && session.arena.phase === 'fight');
+  const zomb = mode === 'zombies';
+  const hands = tools || role === 'fighter' || zomb;      // may pick things up
+  const combat = tools || (role === 'fighter' && session.arena.phase === 'fight') || zomb;
   const waiting = role === 'giant' && session.round.phase === 'hide';   // the giant waits, blind, while they hide
   const myBody = session.body(), dead = myBody.dead;
+  if (!zomb || dead) { zNear = null; hud.hint = ''; nock = null; }
   const frozen = waiting || dead;
   if (dead !== wasDead) {
     wasDead = dead;
     if (dead) {
-      hud.flash(death.halved ? 'You were cut in half' : death.headless ? 'You lost your head' : 'You died', `Back in ${BODY.respawn} seconds`, BODY.respawn, '#ff5a4a');
+      // (if that was the end of a zombies game, the game-over message is the one to read)
+      if (!(mode === 'zombies' && session.zombies.phase === 'over')) hud.flash(death.halved ? 'You were cut in half' : death.headless ? 'You lost your head' : 'You died', mode === 'zombies' ? 'You are back when the round is over, if anyone lasts that long' : `Back in ${BODY.respawn} seconds`, BODY.respawn, '#ff5a4a');
       hud.splatter(5);
       if (carry) { scene.remove(carry.mesh); carry = null; }
       for (let i = 0; i < 2; i++) vr.pulse(i, 1, 500);
@@ -1095,12 +1218,51 @@ renderer.setAnimationLoop((time, frame) => {
     if (act.undo) session.undo();
   }
   if (playing && hands && !dead) {
+    zNear = zomb && !dead ? within(PRIORY, session.zombies, localPose.hands.map(h => h.pos), localPose.head.pos, tmpV.set(0, 0, -1).applyQuaternion(localPose.head.quat), session.zombies.pl[session.myId]) : null;
+    hud.hint = zNear ? `${zNear.label}${zNear.what.startsWith('window:') ? (inVR ? '  ·  hold grip' : '  ·  hold G') : zNear.cost ? (inVR ? '  ·  squeeze grip' : '  ·  press G') : ''}` : '';
     for (let i = 0; i < 2; i++) {
       const hp = localPose.hands[i].pos;
       if (tools && act.del[i] && session.deleteNear(hp, s) && inVR) vr.pulse(i, 0.5, 60);
       const busy = i === 1 && (carry || overItem);
       if (session.held[i] == null) stuck[i] = false;
+      else if (zomb && !stuck[i] && !act.grab[i] && heldWeapon(i)) stuck[i] = true;       // a weapon that was put in my hand (I bought it) stays there
       if (!act.grab[i]) latch[i] = false;
+      // the priory: a squeeze of grip on something for sale buys it; holding grip on a broken window boards it up
+      if (zNear && !dead) {
+        const mine = Math.hypot(hp.x - zNear.pos[0], hp.y - zNear.pos[1], hp.z - zNear.pos[2]) < 1.1 || !inVR;
+        if (zNear.what.startsWith('window:')) {
+          // (whatever is in that hand stays in it: this squeeze is for the boards)
+          if (act.grab[i] && mine) {
+            if (now - lastMend > ZOMBIES.repair * 1000) { lastMend = now; session.repair(Number(zNear.what.slice(7))); }
+            latch[i] = true; lastSqueeze[i] = 0;
+            continue;
+          }
+        } else if (zNear.cost > 0 && act.grabEdge[i] && mine && now - lastBuy > 400 && !session.props.nearest(hp, 0.18 * s, pr => !pr.held && !pr.heldKey)) {
+          lastBuy = now;
+          session.buy(zNear.what, i);
+          latch[i] = true; lastSqueeze[i] = 0;
+          if (inVR) vr.pulse(i, 0.5, 50);
+          continue;
+        }
+      }
+      // a bow: the other hand takes the string (squeeze grip beside the bow), draws it back, and lets go
+      if (nock && nock.hand === i) {
+        const bowPose = localPose.hands[1 - i], bow = heldWeapon(1 - i);
+        if (!bow || !bow.type.weapon.bow) nock = null;
+        else {
+          const B = bow.type.weapon.bow, pull = Math.min(hp.distanceTo(bowPose.pos) / s, B.draw), k = pull / B.draw;
+          if (act.grab[i]) {
+            nock.pull = k;
+            if (inVR) vr.pulse(i, 0.15 + 0.6 * k, 20);
+          } else {
+            if (k > 0.2) { const dir = bowPose.pos.clone().sub(hp).normalize(); loose(1 - i, bowPose.pos.clone().addScaledVector(dir, 0.1 * s), dir, k); }
+            nock = null;
+          }
+          latch[i] = true;
+          continue;
+        }
+      }
+      if (act.grabEdge[i] && session.held[i] == null && heldWeapon(1 - i) && heldWeapon(1 - i).type.weapon.bow && hp.distanceTo(localPose.hands[1 - i].pos) < 0.4 * s) { nock = { hand: i, pull: 0 }; latch[i] = true; continue; }
       // a weapon stays in the hand until grip is squeezed twice quickly (or G is pressed again)
       if (stuck[i] && act.grabEdge[i]) {
         if (!inVR || now - lastSqueeze[i] < DOUBLE_SQUEEZE) { session.release(i, handVelocity(i)); stuck[i] = false; latch[i] = true; lastSqueeze[i] = 0; continue; }
@@ -1210,7 +1372,13 @@ renderer.setAnimationLoop((time, frame) => {
     }
   }
   blood.update(dt, GRAVITY[session.settings.gravity], bloodWorld);
-  level.update(dt);
+  level.update(dt, (!inVR && window.game.debugCamera) || camera);
+  // the arrow on the string, while I am drawing the bow
+  nockArrow.visible = !!nock && !!heldWeapon(1 - (nock ? nock.hand : 0));
+  if (nockArrow.visible) {
+    const a = localPose.hands[nock.hand].pos, b = localPose.hands[1 - nock.hand].pos, d = tmpV.copy(b).sub(a);
+    if (d.lengthSq() > 1e-4) { nockArrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), d.normalize()); nockArrow.position.copy(a).addScaledVector(d, 0.36 * loco.scale); nockArrow.scale.setScalar(loco.scale); }
+  }
   // redraw chunks whose blocks changed: nearest first, one or two per frame (everything after a map change)
   voxelView.update(voxelView.dirty.size > 24 ? 999 : inVR ? 1 : 2, loco.head);
   if (avatar) avatar.setGhost(role === 'ghost');
@@ -1235,4 +1403,5 @@ window.game = {
   armMenu, sky, menuAction, setSize, setPower, get carry() { return carry; }, get time() { return gameTime; },
   voxels, voxelView, world, hud, punchAhead, tryPunch, ROUND, voice, stomp, SHAKE,
   blood, fight, ripAhead, tryHoldArm, punchPower, BODY, FIGHT, RIG, handHist, ARENA, COLOSSEUM, heldWeapon, stuck, photoCount,
+  ZOMBIES, PRIORY, KINDS, TONICS, get zNear() { return zNear; },
 };

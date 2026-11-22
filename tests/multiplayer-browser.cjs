@@ -374,10 +374,10 @@ const until = (page, fn, arg, ms = 15000) => page.waitForFunction(fn, arg, { tim
     check(await until(a, () => game.session.body().cut[0] === 1 && /forearm is gone/.test(game.hud.title), null, 30000), 'the friend\'s axe takes the host\'s forearm off in one blow');
     // a blow the host says was caught on the friend's axe: both hear about it, nobody is hurt
     await a.evaluate(id => game.session.block(id, 1, 1, game.session.poses.get(id).hands[1].pos.clone(), 5), bId);
-    check(await until(b, () => game.hud.title === 'Blocked!' && game.session.body().blood === 100, null, 30000), 'a blow caught on the friend\'s axe: the friend is told it was blocked');
+    check(await until(b, () => game.stats.blocks >= 1 && game.session.body().blood === 100 && game.hud.title !== 'Blocked!', null, 30000), 'a blow caught on the friend\'s axe: the friend hears and feels it (no popup), and is not hurt');
     // the helmet takes the host's punches to the head, until it is knocked off
     await a.evaluate(id => game.session.hit(id, 'head', 250, 1), bId);
-    check(await until(b, () => game.session.body().armour[0] === 5 && game.session.body().blood === 100 && /Helmet took that/.test(game.hud.title), null, 30000), 'the friend\'s helmet takes a punch that would have killed');
+    check(await until(b, () => game.session.body().armour[0] === 5 && game.session.body().blood === 100, null, 30000), 'the friend\'s helmet takes a punch that would have killed');
     await a.evaluate(id => { for (let i = 0; i < 5; i++) game.session.hit(id, 'head', 40, 1); }, bId);
     check(await until(b, () => game.session.body().armour[0] === 0 && /Helmet knocked off/.test(game.hud.title) && [...game.session.props.props.values()].some(p => p.type.id === 'helmet' && p.wounds === 1), null, 30000), 'five more knock it off, and it lies there dented');
     check(await a.evaluate(id => !game.session.players.get(id).avatar.armour[0].visible && game.session.body(id).blood === 100, bId), 'the host sees the bare head, and still no blood');
@@ -393,6 +393,52 @@ const until = (page, fn, arg, ms = 15000) => page.waitForFunction(fn, arg, { tim
     check(await until(b, () => !game.session.body().dead && game.session.role() === 'spectator' && Math.hypot(game.loco.head.x, game.loco.head.z) > 15, null, 90000), 'the friend comes back to life in the seats');
     await a.evaluate(() => game.session.setMode('sandbox'));
     check(await until(b, () => game.session.mode === 'sandbox' && game.session.role() === 'free' && game.session.props.props.size === 0, null, 60000), 'back to the sandbox');
+
+    // ---- zombies: the two of them in the priory together
+    await a.evaluate(() => { Object.assign(game.ZOMBIES, { intro: 6, between: 5, over: 6 }); });
+    await b.evaluate(() => game.session.setMode('zombies'));
+    check(await until(a, () => game.session.mode === 'zombies' && game.session.zombies.phase === 'intro', null, 60000), 'the friend switched to zombies and the game began');
+    check(await until(b, () => game.session.mode === 'zombies' && game.voxels.solidAt(0, 2, 24.25) && !game.voxels.solidAt(0, 1.5, 15) && game.session.zombies.phase === 'intro' && game.session.settings.sky === 'night' && game.level.priory.group.visible, null, 60000), 'the friend has the priory too, at night');
+    let zz = await b.evaluate(id => ({ me: game.loco.head.toArray(), mine: game.session.zombies.pl[id], host: game.session.zombies.pl.h, shut: game.world.statics.filter(c => c.nav === false).length, status: game.hud.status }), bId);
+    check(zz.mine && zz.mine[0] === 500 && zz.host[0] === 500 && Math.abs(zz.me[0]) < 3 && zz.me[2] > 17 && zz.shut === 23 && /500 points/.test(zz.status), `both start in the chapel with 500 points each: ${JSON.stringify(zz)}`);
+    // the friend buys the dagger: the host takes the points and hands it over
+    await b.evaluate(() => { const s = game.PRIORY.shops.find(x => x.id === 'dagger'); game.loco.teleport(new game.THREE.Vector3(s.pos[0], -0.4, s.pos[2] + 1.2), game.loco.yaw); });
+    await b.waitForTimeout(1200);
+    await b.evaluate(() => game.session.buy('dagger', 1));
+    check(await until(b, id => game.heldWeapon(1) && game.heldWeapon(1).type.id === 'dagger' && game.stuck[1] && game.session.zombies.pl[id][0] === 250 && game.hud.title === 'Dagger', bId, 30000), 'the friend buys a dagger: it is in their hand and they have 250 left');
+    check(await a.evaluate(id => game.session.zombies.pl[id][0] === 250 && game.session.zombies.pl.h[0] === 500 && !!game.session.weaponIn(id, 1), bId), 'the host sees it in the friend\'s hand, and still has their own 500');
+    // the dead arrive, and both see them
+    check(await until(a, () => game.session.zombies.phase === 'round' && [...game.session.bots.keys()].filter(id => game.session.isZombie(id)).length >= 2, null, 120000), 'round 1: the dead appear');
+    check(await until(b, () => { const zs = [...game.session.players.values()].filter(p => p.z); return zs.length >= 2 && zs.every(p => p.avatar && p.pose) && game.session.zombies.phase === 'round' && /Round 1/.test(game.hud.status); }, null, 30000), 'the friend sees them too');
+    check(await until(b, () => game.session.zombies.boards.some(n => n < 6) && game.level.priory.windows.some(w => w.n < 6), null, 120000), 'and sees the boards coming off a window');
+    // the friend hits one of them: the points are the friend's
+    const zid = await a.evaluate(() => [...game.session.bots.keys()].find(id => game.session.isZombie(id) && !game.session.body(id).dead));
+    await b.evaluate(id => { const rg = game.session.rigs.get(id); game.loco.teleport(new game.THREE.Vector3(rg.head.x, -0.4, rg.head.z + 1), game.loco.yaw); }, zid);
+    await b.waitForTimeout(1500);
+    await b.evaluate(id => game.session.hit(id, 'torso', 20, 1), zid);
+    check(await until(a, id => game.session.zombies.pl[id][0] === 260, bId, 30000), 'the friend lands a blow on one: 10 points to the friend');
+    await a.evaluate(id => { game.session.horde.player(id).pts = 5000; }, bId);
+    // the friend opens the door to the graveyard: it opens for both
+    await b.evaluate(() => { game.loco.teleport(new game.THREE.Vector3(0, -0.4, 11.2), game.loco.yaw); });
+    await b.waitForTimeout(1500);
+    await b.evaluate(() => game.session.buy('door:0', 1));
+    check(await until(a, () => game.session.zombies.doors[0] === 1 && game.level.priory.doors[0].open && game.session.nav.ok(game.session.nav.index(0, 9.75)), null, 30000), 'the friend buys the door to the graveyard: it opens on the host');
+    check(await until(b, () => game.session.zombies.doors[0] === 1 && game.level.priory.doors[0].open && game.world.statics.filter(c => c.nav === false).length < 23 && game.hud.title === 'The door opens', null, 30000), 'and for the friend');
+    // the friend falls: the game goes on, and they are back when the round is over
+    await a.evaluate(id => { const S = game.session; S._bodyEvents(id, S.body(id).hit('torso', 1e5, { pierce: true }), {}); }, bId);
+    check(await until(b, () => game.session.body().dead && game.session.role() === 'fallen' && /round is over/.test(game.hud.sub), null, 30000), 'the friend dies, and is told they are back when the round is over');
+    check(await a.evaluate(() => game.session.zombies.phase === 'round'), 'the game goes on while the host lives');
+    await a.evaluate(() => { const S = game.session; S.body().heal(); S.horde.state.left = 0; for (const id of [...S.bots.keys()]) if (S.isZombie(id) && !S.body(id).dead) S._harm('h', id, 'head', 1e5, {}, {}); });
+    check(await until(a, () => game.session.zombies.phase === 'break', null, 60000), 'the host puts the rest down: the round is over');
+    check(await until(b, () => !game.session.body().dead && game.session.role() === 'survivor' && game.loco.head.z > 16 && [...game.session.players.values()].filter(p => p.z).length === 0, null, 60000), 'and the friend is back on their feet in the chapel');
+    await b.screenshot({ path: path.join(out, 'mp-zombies.png') });
+    // both down at once: it is over, for both
+    await a.evaluate(id => { const S = game.session; for (const who of ['h', id]) S._bodyEvents(who, S.body(who).hit('torso', 1e5, { pierce: true }), {}); }, bId);
+    check(await until(a, () => game.session.zombies.phase === 'over' && game.hud.title === 'GAME OVER', null, 30000), 'with both dead it is over');
+    check(await until(b, () => game.session.zombies.phase === 'over' && game.hud.title === 'GAME OVER', null, 30000), 'the friend sees so too');
+    check(await until(b, () => game.session.zombies.phase === 'intro' && !game.session.body().dead && game.session.zombies.doors[0] === 0 && !game.level.priory.doors[0].open, null, 60000), 'then it starts again, the door shut once more');
+    await a.evaluate(() => game.session.setMode('sandbox'));
+    check(await until(b, () => game.session.mode === 'sandbox' && game.session.role() === 'free' && !game.level.priory.group.visible, null, 60000), 'back to the sandbox');
 
     // friend leaves; host's room empties
     await b.evaluate(() => game.session.leave());

@@ -5,6 +5,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { texture } from './textures.js';
 import { COLOSSEUM } from './maps.js';
 import { roundName } from './arena.js';
+import { makePriory } from './zscene.js';
 
 // Per surface: tint over its texture, and how many metres one repeat of the texture covers.
 const SURFACE = {
@@ -76,12 +77,18 @@ export function buildScenery(scene, world) {
   }
   let gateCols = [], gatesOpen = true, map = 'sandbox';
 
+  // ---- zombies only: the priory's doors, boarded windows, signs and so on (see zscene.js)
+  const priory = makePriory(scene);
+  const prioryStatics = () => { world.statics = baseStatics.concat(priory.colliders()); world.colliders = world.statics.slice(); };
+
   const tufts = grassTufts();
   scene.add(tufts);
 
   return {
-    board, buttons, bracket,
+    board, buttons, bracket, priory,
     get gatesOpen() { return gatesOpen; },
+    /** Zombies: make the doors, windows and the rest match what the rules say. */
+    setPriory(state) { if (priory.apply(state) && map === 'zombies') prioryStatics(); },
     /** Switch the unbreakable scenery to suit a map, and regrow the grass around it. */
     setMap(mode) {
       map = mode;
@@ -91,6 +98,8 @@ export function buildScenery(scene, world) {
       gateCols = []; gatesOpen = true; gates.position.y = GATE_DROP;
       world.statics = mode === 'sandbox' ? sandboxStatics : baseStatics;
       world.colliders = world.statics.slice();
+      priory.group.visible = mode === 'zombies';
+      if (mode === 'zombies') prioryStatics();
       plantTufts(tufts, MAP, world);
     },
     /** Arena: shut the gates (nobody gets through) or let them drop into the ground. */
@@ -100,13 +109,14 @@ export function buildScenery(scene, world) {
       gatesOpen = open;
       for (const c of gateCols) c.dead = true;            // a hand resting on a gate lets go when it moves
       gateCols = open ? [] : COLOSSEUM.gates.map(([cx, by, cz, w, h, d]) => ({
-        min: new THREE.Vector3(cx - w / 2, by, cz - d / 2), max: new THREE.Vector3(cx + w / 2, by + h, cz + d / 2), kind: 'metal', noProps: true,
+        min: new THREE.Vector3(cx - w / 2, by, cz - d / 2), max: new THREE.Vector3(cx + w / 2, by + h, cz + d / 2), kind: 'metal', noProps: true, nav: false,
       }));
       world.statics = baseStatics.concat(gateCols);
       world.colliders = world.statics.slice();
     },
-    /** Every frame: the gates slide. */
-    update(dt) {
+    /** Every frame: the gates slide (and the priory's doors, chest, spikes and flames move). */
+    update(dt, camera = null) {
+      priory.update(dt, camera);
       const want = gatesOpen ? GATE_DROP : 0;
       if (gates.position.y !== want) gates.position.y += Math.sign(want - gates.position.y) * Math.min(Math.abs(want - gates.position.y), dt * 5);
     },

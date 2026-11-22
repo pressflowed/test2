@@ -519,8 +519,201 @@ function buildArena(v) {
   }
 }
 
+// ------------------------------------------------------------------ zombies: "Graywatch Priory"
+//
+// A ruined priory, shut in on every side. Seven areas, joined by doors that cost points to
+// open: you start in the chapel, with the graveyard beyond it and the rest around that. The
+// dead get in through boarded-up windows (each opens onto a walled pit outside, where they
+// climb out of the ground) and out of the graves in the yard. Everything is on one level.
+const PR_H = 4.5, PR_YARD_H = 8, PR_FLOOR = 0.25;
+export const PRIORY = {
+  floor: PR_FLOOR,
+  // each area's inside: [x0, z0, x1, z1]. The walls between are half a metre thick.
+  zones: {
+    chapel: [-7, 10, 7, 24], yard: [-11, -10, 11, 9.5], tavern: [-25, -6, -11.5, 8], smithy: [11.5, -6, 25, 8],
+    crypt: [-25, -24, -11.5, -6.5], library: [11.5, -24, 25, -6.5], nave: [-11, -24, 11, -10.5],
+  },
+  names: { chapel: 'the Chapel', yard: 'the Graveyard', tavern: 'the Tavern', smithy: 'the Smithy', crypt: 'the Crypt', library: 'the Library', nave: 'the Nave' },
+  start: 'chapel',
+  spawn: [0, PR_FLOOR, 19.5], yaw: 0,
+  yardCeiling: PR_YARD_H,
+  // doors: the two areas each joins, its middle, the way through it (nx, nz), and what it costs
+  doors: [
+    { a: 'chapel', b: 'yard', x: 0, z: 9.75, nx: 0, nz: 1, cost: 750 },
+    { a: 'yard', b: 'tavern', x: -11.25, z: 1, nx: 1, nz: 0, cost: 1000 },
+    { a: 'yard', b: 'smithy', x: 11.25, z: 1, nx: 1, nz: 0, cost: 1000 },
+    { a: 'yard', b: 'nave', x: 0, z: -10.25, nx: 0, nz: 1, cost: 1250 },
+    { a: 'tavern', b: 'crypt', x: -18, z: -6.25, nx: 0, nz: 1, cost: 1250 },
+    { a: 'smithy', b: 'library', x: 18, z: -6.25, nx: 0, nz: 1, cost: 1250 },
+    { a: 'nave', b: 'crypt', x: -11.25, z: -17, nx: 1, nz: 0, cost: 1500 },
+    { a: 'nave', b: 'library', x: 11.25, z: -17, nx: 1, nz: 0, cost: 1500 },
+  ],
+  door: { w: 2, h: 2.5 },
+  // boarded-up windows: the area each lets into, its middle, and the way in (nx, nz)
+  windows: [
+    { zone: 'chapel', x: -4, z: 24.25, nx: 0, nz: -1 }, { zone: 'chapel', x: 4, z: 24.25, nx: 0, nz: -1 },
+    { zone: 'chapel', x: -7.25, z: 17, nx: 1, nz: 0 }, { zone: 'chapel', x: 7.25, z: 17, nx: -1, nz: 0 },
+    { zone: 'tavern', x: -25.25, z: 1, nx: 1, nz: 0 }, { zone: 'tavern', x: -18, z: 8.25, nx: 0, nz: -1 },
+    { zone: 'smithy', x: 25.25, z: 1, nx: -1, nz: 0 }, { zone: 'smithy', x: 18, z: 8.25, nx: 0, nz: -1 },
+    { zone: 'crypt', x: -25.25, z: -15, nx: 1, nz: 0 }, { zone: 'crypt', x: -18, z: -24.25, nx: 0, nz: 1 },
+    { zone: 'library', x: 25.25, z: -15, nx: -1, nz: 0 }, { zone: 'library', x: 18, z: -24.25, nx: 0, nz: 1 },
+    { zone: 'nave', x: -5, z: -24.25, nx: 0, nz: 1 }, { zone: 'nave', x: 5, z: -24.25, nx: 0, nz: 1 },
+  ],
+  window: { w: 1.5, h: 2, pit: 3 },
+  // graves in the yard that the dead climb out of
+  graves: [[-8.5, -7], [8.5, -7], [-8.5, 6], [8.5, 6], [-4, -8], [4, -8], [-8.5, -3.5], [8.5, -3.5]],
+  // Things to buy. pos is where its sign is (on a wall, or standing in the room) and (nx, nz) the
+  // way it faces. kind: weapon | armour | tonic | chest | forge | trap.
+  shops: [
+    { id: 'dagger', kind: 'weapon', item: 'dagger', cost: 250, zone: 'chapel', pos: [-4, 1, 10.3], nx: 0, nz: 1 },
+    { id: 'club', kind: 'weapon', item: 'club', cost: 500, zone: 'chapel', pos: [4, 1, 10.3], nx: 0, nz: 1 },
+    { id: 'sword', kind: 'weapon', item: 'sword', cost: 1000, zone: 'yard', pos: [-6, 1, 9.2], nx: 0, nz: -1 },
+    { id: 'shield', kind: 'weapon', item: 'shield', cost: 750, zone: 'yard', pos: [6, 1, 9.2], nx: 0, nz: -1 },
+    { id: 'spear', kind: 'weapon', item: 'spear', cost: 1250, zone: 'yard', pos: [-6, 1, -9.7], nx: 0, nz: 1 },
+    { id: 'ox', kind: 'tonic', item: 'ox', cost: 2500, zone: 'tavern', pos: [-21, 1, -5.7], nx: 0, nz: 1 },
+    { id: 'hare', kind: 'tonic', item: 'hare', cost: 2000, zone: 'tavern', pos: [-14.5, 1, -5.7], nx: 0, nz: 1 },
+    { id: 'bow', kind: 'weapon', item: 'bow', cost: 1500, zone: 'tavern', pos: [-11.8, 1, 5], nx: -1, nz: 0 },
+    { id: 'forge', kind: 'forge', item: null, cost: 4000, zone: 'smithy', pos: [21, 1, 4.5], nx: -1, nz: 0 },
+    { id: 'axe', kind: 'weapon', item: 'axe', cost: 1500, zone: 'smithy', pos: [14.5, 1, -5.7], nx: 0, nz: 1 },
+    { id: 'hammer', kind: 'weapon', item: 'hammer', cost: 2000, zone: 'smithy', pos: [22, 1, -5.7], nx: 0, nz: 1 },
+    { id: 'helmet', kind: 'armour', item: 'helmet', cost: 1250, zone: 'smithy', pos: [11.8, 1, 5], nx: 1, nz: 0 },
+    { id: 'chestplate', kind: 'armour', item: 'chestplate', cost: 1750, zone: 'smithy', pos: [11.8, 1, -3], nx: 1, nz: 0 },
+    { id: 'chest', kind: 'chest', item: null, cost: 950, zone: 'crypt', pos: [-18, 0.9, -16], nx: 0, nz: 1 },
+    { id: 'cat', kind: 'tonic', item: 'cat', cost: 2000, zone: 'crypt', pos: [-22, 1, -23.7], nx: 0, nz: 1 },
+    { id: 'bear', kind: 'tonic', item: 'bear', cost: 3000, zone: 'library', pos: [22, 1, -23.7], nx: 0, nz: 1 },
+    { id: 'greatsword', kind: 'weapon', item: 'greatsword', cost: 3000, zone: 'library', pos: [11.8, 1, -12], nx: 1, nz: 0 },
+    { id: 'trap', kind: 'trap', item: null, cost: 1000, zone: 'nave', pos: [3, 1, -10.8], nx: 0, nz: -1 },
+  ],
+  // the spikes in the nave's aisle: [x0, z0, x1, z1]
+  trap: [-1.5, -20, 1.5, -14],
+  /** Which area a point is in, or null. */
+  zoneOf(x, z) {
+    for (const [name, [x0, z0, x1, z1]] of Object.entries(this.zones)) if (x >= x0 - 0.25 && x <= x1 + 0.25 && z >= z0 - 0.25 && z <= z1 + 0.25) return name;
+    return null;
+  },
+  /** Where the dead appear for a window: the middle of the pit outside it. */
+  pit(w) { const d = 0.25 + this.window.pit / 2; return [w.x - w.nx * d, w.z - w.nz * d]; },
+};
+
+function buildPriory(v) {
+  const P = PRIORY, F = P.floor, r = rng(77);
+  const WALL = { chapel: 'stone', yard: 'stone', tavern: 'plaster', smithy: 'brick', crypt: 'rock', library: 'plaster', nave: 'stone' };
+  const FLOORS = { chapel: 'stone', yard: 'dirt', tavern: 'plank', smithy: 'stone', crypt: 'rock', library: 'plank', nave: 'marble' };
+  const top = n => (n === 'yard' ? PR_YARD_H : PR_H);
+  // solid first, then hollowed out, so that no area's walls fill in its neighbour
+  for (const [n, [x0, z0, x1, z1]] of Object.entries(P.zones)) v.fill(x0 - 0.5, 0, z0 - 0.5, x1 + 0.5, top(n), z1 + 0.5, WALL[n]);
+  for (const [n, [x0, z0, x1, z1]] of Object.entries(P.zones)) {
+    v.fill(x0, 0, z0, x1, n === 'yard' ? top(n) : top(n) - 0.25, z1, 'air');
+    v.fill(x0, 0, z0, x1, F, z1, FLOORS[n]);
+    if (n !== 'yard' && n !== 'crypt') for (let x = x0 + 3; x < x1 - 1; x += 4) v.fill(x, top(n) - 0.5, z0, x + 0.25, top(n) - 0.25, z1, 'wood');      // beams across the ceiling
+  }
+  // doorways
+  for (const d of P.doors) {
+    const hw = P.door.w / 2;
+    if (d.nz) v.fill(d.x - hw, F, d.z - 0.25, d.x + hw, F + P.door.h, d.z + 0.25, 'air');
+    else v.fill(d.x - 0.25, F, d.z - hw, d.x + 0.25, F + P.door.h, d.z + hw, 'air');
+    // a stone frame round each
+    const fr = (x0, y0, z0, x1, y1, z1) => v.fill(x0, y0, z0, x1, y1, z1, 'marble');
+    if (d.nz) { fr(d.x - hw - 0.25, F, d.z - 0.25, d.x - hw, F + P.door.h + 0.25, d.z + 0.25); fr(d.x + hw, F, d.z - 0.25, d.x + hw + 0.25, F + P.door.h + 0.25, d.z + 0.25); fr(d.x - hw, F + P.door.h, d.z - 0.25, d.x + hw, F + P.door.h + 0.25, d.z + 0.25); }
+    else { fr(d.x - 0.25, F, d.z - hw - 0.25, d.x + 0.25, F + P.door.h + 0.25, d.z - hw); fr(d.x - 0.25, F, d.z + hw, d.x + 0.25, F + P.door.h + 0.25, d.z + hw + 0.25); fr(d.x - 0.25, F + P.door.h, d.z - hw, d.x + 0.25, F + P.door.h + 0.25, d.z + hw); }
+  }
+  // windows, each with its pit outside: a dark stone box with a floor of grave dirt
+  for (const w of P.windows) {
+    const hw = P.window.w / 2, [px, pz] = P.pit(w), hp = P.window.pit / 2;
+    v.fill(px - hp - 0.5, 0, pz - hp - 0.5, px + hp + 0.5, 3.25, pz + hp + 0.5, 'rock');
+    v.fill(px - hp, F, pz - hp, px + hp, 3, pz + hp, 'air');
+    v.fill(px - hp, 0, pz - hp, px + hp, F, pz + hp, 'dirt');
+    if (w.nz) v.fill(w.x - hw, F, w.z - 0.5, w.x + hw, F + P.window.h, w.z + 0.5, 'air');
+    else v.fill(w.x - 0.5, F, w.z - hw, w.x + 0.5, F + P.window.h, w.z + hw, 'air');
+  }
+
+  // ---- the chapel: pews either side of an aisle, pillars, and an altar on a step at the south end
+  {
+    const [x0, z0, x1, z1] = P.zones.chapel;
+    for (const side of [-1, 1]) for (let z = 12; z <= 16; z += 2) {
+      v.fill(side * 2.25 - 1.25, F, z, side * 2.25 + 1.25, F + 0.5, z + 0.5, 'plank');           // seat
+      v.fill(side * 2.25 - 1.25, F + 0.5, z + 0.25, side * 2.25 + 1.25, F + 1, z + 0.5, 'plank');  // back
+    }
+    for (const px of [x0 + 1.5, x1 - 2]) for (const pz of [12.5, 20.5]) v.fill(px, F, pz, px + 0.5, PR_H - 0.25, pz + 0.5, 'marble');
+    v.fill(-3, F, 21.5, 3, F + 0.25, z1, 'marble');                                               // the step
+    v.fill(-1.25, F + 0.25, 22.5, 1.25, F + 1.25, 23.25, 'marble');                               // the altar
+    v.fill(-0.25, F + 1.25, 22.75, 0.25, F + 2.75, 23, 'wood'); v.fill(-0.75, F + 2, 22.75, 0.75, F + 2.25, 23, 'wood');   // a cross on it
+    v.fill(-0.75, 0, 10, 0.75, F, 21.5, 'roof');                                                  // a carpet, laid in the floor
+  }
+
+  // ---- the graveyard: headstones in rows, mounds where the dead come up, a dead tree, a well, stone paths
+  {
+    v.fill(-1, 0, -10, 1, F, 9.5, 'stone'); v.fill(-11, 0, 0, 11, F, 2, 'stone');                 // paths between the four doors
+    for (const [gx, gz] of P.graves) {
+      v.fill(gx - 0.5, F, gz - 1, gx + 0.5, F + 0.25, gz + 1, 'dirt');
+      const far = Math.abs(gx) > 6 ? Math.sign(gx) * 0.75 : 0, north = far ? 0 : -1.25;            // the stone stands at the head of the grave, by the wall
+      v.fill(gx + far - (far ? 0.125 : 0.5), F, gz + north - (far ? 0.5 : 0.125), gx + far + (far ? 0.125 : 0.5), F + 1.25, gz + north + (far ? 0.5 : 0.125), 'marble');
+    }
+    // more headstones, nobody under them
+    for (const [hx, hz] of [[-5, 4.5], [-3.5, 6.5], [5, 4.5], [3.5, 6.5], [-5.5, -4.5], [5.5, -4.5], [-3.5, 4.5], [3.5, 4.5]]) v.fill(hx - 0.375, F, hz - 0.125, hx + 0.375, F + 0.75 + (r() < 0.5 ? 0.25 : 0), hz + 0.125, r() < 0.5 ? 'marble' : 'rock');
+    // the dead tree
+    const tx = 5, tz = -6;
+    v.fill(tx - 0.375, F, tz - 0.375, tx + 0.375, 4.5, tz + 0.375, 'wood');
+    v.fill(tx + 0.375, 3.5, tz - 0.125, tx + 2, 3.75, tz + 0.125, 'wood'); v.fill(tx - 1.75, 2.75, tz - 0.125, tx - 0.375, 3, tz + 0.125, 'wood');
+    v.fill(tx - 0.125, 4.5, tz - 0.125, tx + 0.125, 5.75, tz + 0.125, 'wood'); v.fill(tx - 0.125, 3.75, tz + 0.375, tx + 0.125, 4, tz + 1.5, 'wood');
+    // the well
+    v.fill(-6, F, -2.75, -4.5, F + 0.75, -1.25, 'stone'); v.fill(-5.75, F, -2.5, -4.75, F + 0.75, -1.5, 'air');
+    v.fill(-6, F + 0.75, -2.75, -5.75, F + 2, -2.5, 'wood'); v.fill(-4.75, F + 0.75, -1.5, -4.5, F + 2, -1.25, 'wood'); v.fill(-6, F + 2, -2.75, -4.5, F + 2.25, -1.25, 'roof');
+    // a stone cross in the middle, on a plinth
+    v.fill(3.25, F, 4, 4.25, F + 0.5, 5, 'stone');
+  }
+
+  // ---- the tavern: a bar along the west wall with barrels behind it, tables, a hearth
+  {
+    v.fill(-23, F, -4.75, -22.25, F + 1, -1, 'plank');                                            // the bar (clear of the window further along that wall)
+    for (let z = -5; z <= -1.5; z += 1.75) { v.fill(-24.75, F, z, -24, F + 1, z + 0.75, 'wood'); v.fill(-24.75, F + 1, z, -24, F + 1.75, z + 0.75, 'wood'); }
+    for (const z of [4.5, 6]) v.fill(-24.75, F, z, -24, F + 1, z + 0.75, 'wood');                  // a couple more kegs in the corner
+    for (const [tx, tz] of [[-19, -2.5], [-15.5, -2], [-19, 4.5], [-15, 5]]) {
+      v.fill(tx - 0.125, F, tz - 0.125, tx + 0.125, F + 0.75, tz + 0.125, 'wood'); v.fill(tx - 0.75, F + 0.75, tz - 0.75, tx + 0.75, F + 1, tz + 0.75, 'plank');
+    }
+    v.fill(-13.5, F, 7.25, -11.5, F + 2, 8, 'brick'); v.fill(-13.25, F, 7.25, -11.75, F + 1.25, 7.75, 'air');      // the hearth
+  }
+
+  // ---- the smithy: the forge in the corner, an anvil, coal, a trough, racks
+  {
+    v.fill(22, F, 5.5, 25, F + 1.25, 8, 'brick'); v.fill(22.5, F + 1, 6, 24.5, F + 1.25, 7.5, 'rock');            // the hearth of the forge, full of coal
+    v.fill(23, F + 2.75, 6.5, 24.5, PR_H - 0.25, 8, 'brick');                                                     // its hood
+    v.fill(19.75, F, 4, 20.5, F + 0.5, 5, 'wood'); v.fill(19.5, F + 0.5, 4.125, 20.75, F + 0.75, 4.875, 'rock');   // the anvil on its block
+    v.fill(15, F, 6.75, 17, F + 0.75, 7.75, 'wood'); v.fill(15.25, F + 0.25, 7, 16.75, F + 0.75, 7.5, 'air');       // a trough
+    v.fill(23.5, F, -2, 24.75, F + 0.75, 0.5, 'rock');                                                            // a heap of coal
+    v.fill(16, F, -1, 16.25, F + 1.5, 2.5, 'plank');                                                              // a rack
+  }
+
+  // ---- the crypt: stone coffins in two rows, low arches, a dais for the chest
+  {
+    for (const cx of [-22.5, -13.5]) for (let z = -21.5; z <= -10; z += 3.75) { v.fill(cx - 0.5, F, z, cx + 0.5, F + 0.75, z + 2, 'marble'); v.fill(cx - 0.625, F + 0.75, z - 0.125, cx + 0.625, F + 1, z + 2.125, 'stone'); }
+    for (const px of [-21, -15.5]) for (const pz of [-19.5, -12.5]) v.fill(px, F, pz, px + 0.5, PR_H - 0.25, pz + 0.5, 'stone');
+    v.fill(-19.25, F, -17, -16.75, F + 0.25, -15, 'marble');                                                      // the dais
+  }
+
+  // ---- the library: shelves in aisles, a reading table
+  {
+    const books = ['roof', 'brick', 'leaf', 'hay'];
+    for (const sx of [14.5, 18, 21.5]) for (const [za, zb] of [[-22.5, -19], [-14.5, -9.5]]) {
+      v.fill(sx, F, za, sx + 0.5, F + 2.5, zb, 'plank');
+      for (let y = F + 0.25; y < F + 2.25; y += 0.75) for (let z = za + 0.25; z < zb - 0.25; z += 0.25) if (r() < 0.82) v.fill(sx, y, z, sx + 0.5, y + 0.5, z + 0.25, books[Math.floor(r() * books.length)]);
+    }
+    v.fill(15.5, F + 0.75, -17.75, 20.5, F + 1, -16.25, 'plank');
+    for (const lx of [15.75, 20]) for (const lz of [-17.5, -16.75]) v.fill(lx, F, lz, lx + 0.25, F + 0.75, lz + 0.25, 'wood');
+  }
+
+  // ---- the nave: two rows of columns, a red carpet up the aisle, a high altar at the north end
+  {
+    for (const cx of [-5, 4.5]) for (let z = -22; z <= -13; z += 3) v.fill(cx, F, z, cx + 0.5, PR_H - 0.25, z + 0.5, 'marble');
+    v.fill(-1.5, 0, -24, 1.5, F, -10.5, 'roof');
+    v.fill(-2.5, F, -24, 2.5, F + 0.25, -22.5, 'marble'); v.fill(-1.25, F + 0.25, -23.75, 1.25, F + 1.25, -23, 'marble');
+    for (const bx of [-9.5, 8]) for (let z = -20; z <= -13; z += 2.5) { v.fill(bx, F, z, bx + 1.5, F + 0.5, z + 0.5, 'plank'); }      // benches along the walls
+  }
+}
+
 export const MAPS = {
   sandbox: { label: 'Sandbox', spawn: [0, 0, 6], giantSpawn: [0, 0, 6], build: buildSandbox },
   hideseek: { label: 'Hide and seek', spawn: [0, 0, 5], giantSpawn: [0, 0, -5.5], build: buildHideSeek },
   arena: { label: 'Arena', spawn: [0, 0.25, 5], giantSpawn: [0, 0.25, 5], build: buildArena },
+  zombies: { label: 'Zombies', spawn: PRIORY.spawn, giantSpawn: PRIORY.spawn, build: buildPriory },
 };

@@ -193,7 +193,8 @@ export class PropWorld {
     const { geo, mat } = propVisual(t.id);
     if (t.gib && wounds == null) wounds = LOOSE[t.id] || 0;
     const gib = t.gib ? makeGib(t.id, color || t.color, wounds) : null;       // a real body piece, in its owner's skin colour
-    const mesh = gib || new THREE.Mesh(t.weapon && wounds ? weaponVisual(t.id, wounds).geo : t.armour && wounds ? armourVisual(t.id, true).geo : geo, t.fuse ? mat.clone() : mat);
+    const forged = t.weapon && color ? weaponVisual(t.id, wounds || 0, true) : null;
+    const mesh = gib || new THREE.Mesh(forged ? forged.geo : t.weapon && wounds ? weaponVisual(t.id, wounds).geo : t.armour && wounds ? armourVisual(t.id, true).geo : geo, forged ? forged.mat : t.fuse ? mat.clone() : mat);
     mesh.position.copy(pos);
     if (quat) mesh.quaternion.copy(quat);
     if (t.weapon && owner !== 'rack') mesh.quaternion.multiply(_q.setFromAxisAngle(_n.set(0, 0, 1), 1.35));   // weapons come out lying down, not balanced on end
@@ -252,8 +253,11 @@ export class PropWorld {
   bloody(p) { if (p && p.type.weapon && p.wounds < MAX_BLOOD) this._stain(p, p.wounds + 1); }
   _stain(p, level) {
     p.wounds = level;
-    p.mesh.geometry = weaponVisual(p.type.id, level).geo;
+    const vis = weaponVisual(p.type.id, level, !!p.color);
+    p.mesh.geometry = vis.geo; p.mesh.material = vis.mat;
   }
+  /** A weapon comes out of the forge: it glows, and (see the session) does more. Kept in `color`, which weapons do not otherwise use. */
+  forge(p) { if (p && p.type.weapon && !p.color) { p.color = 1; this._stain(p, p.wounds); } }
 
   /** Remove every piece of one dead body. */
   removeGroup(rag) {
@@ -571,7 +575,7 @@ export class PropWorld {
       const pos = new THREE.Vector3(x, y, z), quat = new THREE.Quaternion(qx, qy, qz, qw);
       if (!p) p = this.spawn(PROP_TYPES[ti].id, pos, quat, { id, owner: owner || null, color: color || 0, scale: size || 1, wounds: wounds || 0 });
       p.target.pos.copy(pos); p.target.quat.copy(quat);
-      if (p.type.weapon && p.wounds !== (wounds || 0)) this._stain(p, wounds || 0);
+      if (p.type.weapon && (p.wounds !== (wounds || 0) || (p.color || 0) !== (color || 0))) { p.color = color || 0; this._stain(p, wounds || 0); }
       p.heldKey = heldKey || null;
       p.fuse = fuse || 0;
     }

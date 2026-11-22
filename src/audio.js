@@ -253,3 +253,25 @@ export function clang(vol = 1, heavy = 0) {
   g.gain.setValueAtTime(0.8 * vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
   s.connect(bp).connect(g).connect(ac.destination); s.start(t); s.stop(t + 0.06);
 }
+
+/** One of the dead, moaning. `deep` (0 to 1) lowers it: a brute. */
+export function groan(vol = 1, deep = 0) {
+  if (!ac || vol < 0.02) return;
+  const t = ac.currentTime, f = (120 - 45 * deep) * (0.85 + Math.random() * 0.3), len = 0.7 + Math.random() * 0.5;
+  const o = ac.createOscillator(), lp = ac.createBiquadFilter(), g = ac.createGain();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(f, t); o.frequency.linearRampToValueAtTime(f * (0.7 + Math.random() * 0.5), t + len * 0.6); o.frequency.linearRampToValueAtTime(f * 0.6, t + len);
+  lp.type = 'lowpass'; lp.frequency.setValueAtTime(380, t); lp.frequency.linearRampToValueAtTime(700, t + len * 0.4); lp.frequency.linearRampToValueAtTime(260, t + len); lp.Q.value = 5;
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.3 * vol, t + 0.12); g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+  o.connect(lp).connect(g).connect(ac.destination); o.start(t); o.stop(t + len + 0.05);
+}
+
+/** A bowstring let go. */
+export function twang(vol = 1) {
+  if (!ac || vol < 0.02) return;
+  const t = ac.currentTime, o = ac.createOscillator(), g = ac.createGain();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(340, t); o.frequency.exponentialRampToValueAtTime(150, t + 0.22);
+  g.gain.setValueAtTime(0.4 * vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+  o.connect(g).connect(ac.destination); o.start(t); o.stop(t + 0.27);
+}

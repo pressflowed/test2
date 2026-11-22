@@ -163,7 +163,7 @@ const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (
     await gameWait(0.5);
     r = await page.evaluate(() => ({ fx: game.fx.map(e => e.k + ':' + e.left), armour: game.session.body('b1').armour.slice(), blood: game.session.body('b1').blood, worn: game.session.players.get('b1').avatar.armour.map(m => !!m && m.visible), scrap: !!game.T.prop('helmet', 1), sub: game.hud.sub, title: game.hud.title }));
     check(r.fx.join() === 'armour:0' && r.armour[0] === 0 && r.blood === 100 && !r.worn[0] && r.scrap, `the third knocks it off, dented: ${JSON.stringify(r)}`);
-    check(/knocked off/.test(r.title), `and I am told: "${r.title}"`);
+    check(!/knocked off|Armour/.test(r.title), `nothing pops up about it on my screen (I hear it, and see it fly off): "${r.title}"`);
     k = await page.evaluate(() => game.session.bots.get('b1').loco.head.toArray());
     await shot('guard-4-helmet-off.png', [k[0] + 1.6, k[1], k[2] + 1.2], [k[0], k[1] - 0.5, k[2]], 55);
     await cut('head');
@@ -257,6 +257,7 @@ const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (
         const S = game.session, rg = S.rigs.get(game.T.foe());
         if (S.arena.phase !== 'fight' || !rg) return false;
         S.bots.get(game.T.foe()).cool = 1e9;
+        S._threat = () => 0;                      // (nor does it raise its shield at each swing: here it just holds it in front of its chest)
         const at = i => (i % 3 ? rg.head : rg.torsoTop.clone().lerp(rg.torsoBottom, 0.4));        // two at the head (over its shield), then one at the body (into it)
         game.aimAt = at(game.swings = (game.swings || 0) + 1);
         const d = new game.THREE.Vector3(game.aimAt.x - game.loco.head.x, 0, game.aimAt.z - game.loco.head.z), flat = d.length();

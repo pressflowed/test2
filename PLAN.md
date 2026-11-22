@@ -99,4 +99,6 @@ The plan above was the starting point. What exists today, in the order it was bu
 8. More gore (heads come off, corpses are ragdolls), weapons, and an arena mode: a knockout tournament in a colosseum, with gladiator bots that fight back.
 9. Blocking (a blow caught on a weapon or a shield does nothing), shields, and armour that soaks up a few blows and is then knocked off. Surface textures are now photos from TextureTown instead of being painted in code.
 
+10. Bots rebuilt: they move by pulling on the ground with their hands, as players do, and find their way with a navigation grid. A zombies mode on its own map: waves, points, things to buy, doors, boarded windows, tonics, power-ups, a bow.
+
 Still open from the original plan: bots that play tag or hide and seek, and a measured performance pass on Quest 2.
