@@ -45,6 +45,11 @@ export const PROP_TYPES = [
   ...Object.entries(WEAPONS).map(([id, w]) => ({ id, label: w.label, shape: 'box', size: w.size, mass: w.mass, color: 0xcfd6dc, weapon: w })),
   // armour: pick a piece up and it is on (see armour.js). A dented one (wounds: 1) is just scrap.
   ...Object.entries(ARMOUR).map(([id, a]) => ({ id, label: a.label, shape: 'box', size: a.size, mass: a.mass, color: 0xcfd6dc, armour: a })),
+  // lumps of ore (the horror mode): they fall out of the rock when it is mined, to be carried to the crusher
+  { id: 'ore_copper', label: 'Copper ore', shape: 'sphere', r: 0.085, mass: 1.5, color: 0xc8703a, bounce: 0.2, ore: 'copper', hidden: true },
+  { id: 'ore_iron', label: 'Iron ore', shape: 'sphere', r: 0.085, mass: 1.8, color: 0xa9a29a, bounce: 0.2, ore: 'iron', hidden: true },
+  { id: 'ore_gold', label: 'Gold ore', shape: 'sphere', r: 0.08, mass: 2.2, color: 0xf2c63a, bounce: 0.2, ore: 'gold', hidden: true },
+  { id: 'ore_crystal', label: 'Crystal', shape: 'sphere', r: 0.08, mass: 1.2, color: 0x7ff0f5, bounce: 0.3, ore: 'crystal', hidden: true },
   // body pieces: not in the spawn menu; they appear when someone loses a limb or dies, and fade after a while
   { id: 'gib_head', label: 'Head', shape: 'sphere', r: 0.11, mass: 4, color: 0xe0ac86, bounce: 0.35, gib: true },
   { id: 'gib_torso', label: 'Body', shape: 'box', size: [0.42, 0.66, 0.22], mass: 25, color: 0xe0ac86, gib: true },
@@ -56,7 +61,7 @@ export const PROP_TYPES = [
   { id: 'gib_guts', label: 'Guts', shape: 'sphere', r: 0.085, mass: 1.5, color: 0xd08080, gib: true },
 ];
 /** What the spawn menu offers. */
-export const SPAWNABLE = PROP_TYPES.filter(t => !t.gib);
+export const SPAWNABLE = PROP_TYPES.filter(t => !t.gib && !t.hidden);
 export const GIB_LIFE = 80;   // seconds a body piece lies around
 export const MAX_GIBS = 56;   // more than this and the oldest goes (a whole body at a time)
 export const TYPE = Object.fromEntries(PROP_TYPES.map(t => [t.id, t]));
@@ -88,10 +93,11 @@ export function propVisual(id) {
     if (t.armour) return (visuals[id] = armourVisual(id));
     let geo;
     if (t.shape === 'box') geo = new THREE.BoxGeometry(...t.size);
+    else if (t.ore) geo = new THREE.DodecahedronGeometry(t.r, 0);
     else if (t.shape === 'sphere') geo = new THREE.SphereGeometry(t.r, 20, 14);
     else geo = new THREE.CylinderGeometry(t.rTop ?? t.r, t.r, t.h, 16);
     const map = texture(id);
-    const mat = new THREE.MeshLambertMaterial(map ? { map } : { color: t.color });
+    const mat = new THREE.MeshLambertMaterial(map ? { map } : { color: t.color, flatShading: !!t.ore, emissive: t.ore ? new THREE.Color(t.color).multiplyScalar(t.ore === 'crystal' ? 0.45 : 0.12) : 0x000000 });
     if (t.float) { mat.transparent = true; mat.opacity = 0.92; }
     visuals[id] = { geo, mat };
   }

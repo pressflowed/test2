@@ -195,6 +195,7 @@ export class Bot {
         this.gait = 'run';
       }
     } else if (this.brain === 'zombie') this._zombie(dt, ctx, toward, face, flat);
+    else if (this.brain === 'stalker') this._stalker(dt, ctx, toward, face, flat);
     else if (this.brain === 'fight') this._fight(dt, body, ctx, toward, face, flat);
     else if (this.brain === 'dummy') this._dummy(dt, ctx, toward, face, flat);
     else if (ctx.near) face(ctx.near);
@@ -330,6 +331,85 @@ export class Bot {
       const vy = Math.min(Math.sqrt(2 * 9.8 * (up + 0.5)), 8.5), tt = vy / 9.8;
       this.leap = new THREE.Vector3((best.pos.x - at.x) / tt * 0.9, vy, (best.pos.z - at.z) / tt * 0.9);
     }
+  }
+
+  // What hunts in the Deep. It walks from cavern to cavern, turning its head as it goes; a sound
+  // (somebody mining) brings it to look; and anyone it sees in front of it, it runs down. When it
+  // loses them it goes to where it saw them last, stands turning this way and that for a while,
+  // and then goes back to its rounds. ctx: prey [{ id, pos, seen, safe }], noises [{ pos, t }],
+  // nodes [{ x, z, depth }], M (how well it sees, hears and remembers), field (the way to this.want).
+  _stalker(dt, ctx, toward, face, flat) {
+    const at = this.loco.head, M = ctx.M || { sight: 16, hear: 22, memory: 5, search: 12 }, s = this.loco.scale;
+    const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
+    this.mood = this.mood || 'roam';
+    this.moodT = (this.moodT || 0) + dt;
+    this.last = this.last || new THREE.Vector3();
+    const go = mood => { this.mood = mood; this.moodT = 0; };
+    // who can it see? Anyone in line of sight who is in front of it (or right beside it; or whom it is already after)
+    let seen = null, sd = Infinity;
+    for (const p of ctx.prey || []) {
+      if (p.safe || !p.seen) continue;
+      const dx = p.pos.x - at.x, dz = p.pos.z - at.z, d = Math.hypot(dx, dz) || 1;
+      if ((d < 3.5 || (dx * fx + dz * fz) / d > 0.1 || this.mood === 'chase') && d < sd) { sd = d; seen = p; }
+    }
+    if (seen) {
+      if (this.mood !== 'chase') this.events.push({ type: 'spot', target: seen.id });
+      if (this.mood !== 'chase') go('chase');
+      this.prey = seen.id; this.last.copy(seen.pos); this._lost = 0;
+    }
+    if (this.mood === 'chase') {
+      this.gait = 'run';
+      this.want = this.last;
+      if (!seen) {
+        // out of sight: on to where they were, for as long as it remembers
+        this._lost += dt;
+        if (this._lost > M.memory || flat(this.last) < 1.2) { go('search'); this._look = this.yaw; return; }
+        toward(this.last, ctx.field);
+        if (this.move.lengthSq() > 0) this.faceYaw = Math.atan2(-this.move.x, -this.move.z);
+        return;
+      }
+      const reach = this.reach * s;
+      if (sd < 2.5 && (!ctx.nav || ctx.nav.clear(at.x, at.z, seen.pos.x, seen.pos.z))) this.move.set((seen.pos.x - at.x) / sd, 0, (seen.pos.z - at.z) / sd);
+      else toward(seen.pos, ctx.field);
+      face(seen.pos); this.aim = seen.pos;
+      if (sd < reach && Math.abs(seen.pos.y - at.y) < 1.3 * s) {
+        if (sd < reach * 0.55) this.move.set(0, 0, 0);
+        if (this.cool <= 0 && this.swing <= 0) { this.swing = SWING; this.cool = this.hitEvery * (0.85 + Math.random() * 0.3); this.target = seen.id; }
+      }
+      return;
+    }
+    // a noise, newer than the last one it went to look at?
+    for (const n of ctx.noises || []) {
+      if (n.t <= (this._heard || 0) || Math.hypot(n.pos.x - at.x, n.pos.z - at.z) > M.hear) continue;
+      this._heard = n.t; this.last.copy(n.pos); go('hunt');
+    }
+    if (this.mood === 'hunt') {
+      this.gait = 'jog'; this.want = this.last;
+      if (flat(this.last) < 2 || this.moodT > 25) { go('search'); this._look = this.yaw; return; }
+      toward(this.last, ctx.field);
+      if (this.move.lengthSq() > 0) this.faceYaw = Math.atan2(-this.move.x, -this.move.z) + Math.sin(this.t * 2.2) * 0.5;
+      return;
+    }
+    if (this.mood === 'search') {
+      // standing, looking all about; now and then a few steps one way or another
+      this.faceYaw = this._look + Math.sin(this.moodT * 1.5) * 1.5 + this.moodT * 0.5;
+      if (Math.sin(this.moodT * 0.9) > 0.75) { this.move.set(fx, 0, fz); this.gait = 'shuffle'; }
+      if (this.moodT > M.search) { go('roam'); this.want = null; }
+      return;
+    }
+    // its rounds: on to another cavern (never the camp)
+    if (!this.want || flat(this.want) < 2.5 || this.moodT > 45) {
+      const arrived = !!this.want && flat(this.want) < 2.5;
+      const nodes = (ctx.nodes || []).filter(n => n.depth > 0 && Math.hypot(n.x - at.x, n.z - at.z) > 6);
+      const n = nodes[Math.floor(Math.random() * nodes.length)];
+      this.want = n ? new THREE.Vector3(n.x, 0, n.z) : null;
+      this.moodT = 0;
+      if (arrived && Math.random() < 0.6) { go('search'); this._look = this.yaw; this.moodT = M.search * 0.6; return; }       // a look round before it moves on
+    }
+    if (!this.want) return;
+    this.gait = 'walk';
+    toward(this.want, ctx.field);
+    if (this.move.lengthSq() > 0) this.faceYaw = Math.atan2(-this.move.x, -this.move.z) + Math.sin(this.t * 1.4) * 0.75;     // its head goes from side to side as it walks
   }
 
   // ------------------------------------------------------------------ body

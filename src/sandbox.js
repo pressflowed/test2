@@ -6,6 +6,7 @@ import { texture } from './textures.js';
 import { COLOSSEUM } from './maps.js';
 import { roundName } from './arena.js';
 import { makePriory } from './zscene.js';
+import { makeCamp } from './cscene.js';
 
 // Per surface: tint over its texture, and how many metres one repeat of the texture covers.
 const SURFACE = {
@@ -31,7 +32,8 @@ export function buildScenery(scene, world) {
   wall(0, -half - 0.5, MAP + 2, 1); wall(0, half + 0.5, MAP + 2, 1);
   wall(-half - 0.5, 0, 1, MAP); wall(half + 0.5, 0, 1, MAP);
   for (const mesh of mergeBoxes(walls)) scene.add(mesh);
-  scene.add(grassFloor(MAP + 2));
+  const meadow = grassFloor(MAP + 2);
+  scene.add(meadow);
   const baseStatics = world.statics.slice();
 
   // ---- sandbox only: control panel near the start (slap the buttons on top) and the info board
@@ -78,6 +80,7 @@ export function buildScenery(scene, world) {
   let gateCols = [], gatesOpen = true, map = 'sandbox';
 
   // ---- zombies only: the priory's doors, boarded windows, signs and so on (see zscene.js)
+  const camp = makeCamp(scene);            // horror only: the shop, the crusher and the lights at the mouth of the cave
   const priory = makePriory(scene);
   const prioryStatics = () => { world.statics = baseStatics.concat(priory.colliders()); world.colliders = world.statics.slice(); };
 
@@ -85,7 +88,7 @@ export function buildScenery(scene, world) {
   scene.add(tufts);
 
   return {
-    board, buttons, bracket, priory,
+    board, buttons, bracket, priory, camp,
     get gatesOpen() { return gatesOpen; },
     /** Zombies: make the doors, windows and the rest match what the rules say. */
     setPriory(state) { if (priory.apply(state) && map === 'zombies') prioryStatics(); },
@@ -99,6 +102,8 @@ export function buildScenery(scene, world) {
       world.statics = mode === 'sandbox' ? sandboxStatics : baseStatics;
       world.colliders = world.statics.slice();
       priory.group.visible = mode === 'zombies';
+      camp.group.visible = mode === 'horror';
+      meadow.visible = tufts.visible = mode !== 'horror';      // solid rock underfoot down there, not a meadow
       if (mode === 'zombies') prioryStatics();
       plantTufts(tufts, MAP, world);
     },
@@ -117,6 +122,7 @@ export function buildScenery(scene, world) {
     /** Every frame: the gates slide (and the priory's doors, chest, spikes and flames move). */
     update(dt, camera = null) {
       priory.update(dt, camera);
+      camp.update(dt);
       const want = gatesOpen ? GATE_DROP : 0;
       if (gates.position.y !== want) gates.position.y += Math.sign(want - gates.position.y) * Math.min(Math.abs(want - gates.position.y), dt * 5);
     },

@@ -23,6 +23,8 @@ export const WEAPONS = {
   // a bow shoots arrows (see arrows.js): `bow` is how fast a full draw sends one (m/s), what it does to
   // whoever it hits, and how far back the string comes (m). It faces the way the knuckles point, like a shield.
   bow: { label: 'Bow', size: [0.2, 1.24, 0.06], mass: 0.9, dmg: 8, sharp: false, knock: 0.5, hilt: 0, fwd: 0, hits: [[0, 0.5]], r: 0.04, bow: { speed: 36, dmg: 48, draw: 0.5 } },
+  // a pickaxe (the horror mode): its points take ore out of the rock. It will do for a weapon at a pinch.
+  pickaxe: { label: 'Pickaxe', size: [0.56, 0.8, 0.06], mass: 2.6, dmg: 30, sharp: true, knock: 1.2, hilt: -0.28, hits: [[0.24, 0.31], [-0.24, 0.31]], r: 0.06, pick: true },
 };
 /** The ones that hang in the arena: what you hit people with at arm's length. */
 export const ARMS = ['sword', 'axe', 'spear', 'club', 'hammer', 'dagger'];
@@ -147,6 +149,12 @@ const BUILD = {
     rod(0.036, 0.036, -0.75, -0.7, GOLD, 6), rod(0.02, 0.02, -0.71, -0.42, DARK), box(0.24, 0.036, 0.05, 0, -0.4, 0, GOLD),
     box(0.075, 1.02, 0.016, 0, 0.13, 0, STEEL), box(0.02, 0.9, 0.022, 0, 0.1, 0, IRON),
     paint(new THREE.CylinderGeometry(0, 0.053, 0.11, 4).rotateY(Math.PI / 4).scale(1, 1, 0.22).translate(0, 0.695, 0), STEEL),
+  ],
+  pickaxe: () => [
+    rod(0.02, 0.018, -0.4, 0.36, WOOD), rod(0.025, 0.025, -0.4, -0.36, DARK),
+    box(0.2, 0.06, 0.045, 0, 0.32, 0, IRON),
+    paint(new THREE.CylinderGeometry(0.008, 0.03, 0.2, 4).rotateZ(-Math.PI / 2).translate(0.19, 0.315, 0), STEEL),
+    paint(new THREE.CylinderGeometry(0.008, 0.03, 0.2, 4).rotateZ(Math.PI / 2).translate(-0.19, 0.315, 0), STEEL),
   ],
   // a bow: the grip in the middle, two limbs bending back toward the archer (-X), and the string
   bow: () => {

@@ -275,3 +275,34 @@ export function twang(vol = 1) {
   g.gain.setValueAtTime(0.4 * vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
   o.connect(g).connect(ac.destination); o.start(t); o.stop(t + 0.27);
 }
+
+/** Something big, breathing and rumbling in the dark. */
+export function growl(vol = 1) {
+  if (!ac || vol < 0.02) return;
+  const t = ac.currentTime, len = 1.1 + Math.random() * 0.8, f = 46 + Math.random() * 14;
+  const o = ac.createOscillator(), lfo = ac.createOscillator(), depth = ac.createGain(), lp = ac.createBiquadFilter(), g = ac.createGain();
+  o.type = 'sawtooth'; o.frequency.setValueAtTime(f, t); o.frequency.linearRampToValueAtTime(f * 0.8, t + len);
+  lfo.frequency.value = 22 + Math.random() * 8; depth.gain.value = 0.5;        // the rattle in it
+  lp.type = 'lowpass'; lp.frequency.value = 420; lp.Q.value = 3;
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.45 * vol, t + 0.2); g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+  lfo.connect(depth).connect(g.gain);
+  o.connect(lp).connect(g).connect(ac.destination);
+  o.start(t); lfo.start(t); o.stop(t + len + 0.05); lfo.stop(t + len + 0.05);
+}
+
+/** It has seen you: a shriek. */
+export function screech(vol = 1) {
+  if (!ac || vol < 0.02) return;
+  const t = ac.currentTime, len = 1.3;
+  for (const [f0, f1, gain] of [[620, 1500, 0.3], [933, 2260, 0.22], [310, 700, 0.25]]) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + 0.25); o.frequency.exponentialRampToValueAtTime(f0 * 0.7, t + len);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(gain * vol, t + 0.05); g.gain.setValueAtTime(gain * vol, t + len * 0.6); g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    o.connect(g).connect(ac.destination); o.start(t); o.stop(t + len + 0.05);
+  }
+  const n = ac.createBufferSource(), hp = ac.createBiquadFilter(), g = ac.createGain();
+  n.buffer = noise; n.loop = true; hp.type = 'highpass'; hp.frequency.value = 2500;
+  g.gain.setValueAtTime(0.25 * vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+  n.connect(hp).connect(g).connect(ac.destination); n.start(t); n.stop(t + len);
+}

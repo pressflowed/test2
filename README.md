@@ -2,7 +2,7 @@
 
 A VR tag game where you have no legs: you move by pushing off the world with your hands. It's built with WebXR and Three.js and made for Meta Quest. See [PLAN.md](PLAN.md) for the roadmap.
 
-**Current state: a voxel world with four modes, solo or online: Sandbox, Hide and seek, Arena (a knockout tournament with weapons, shields and armour in a colosseum) and Zombies (hold a ruined priory against waves of the dead, buying weapons and opening doors with the points you earn). You have a real body: you can be hurt, lose arms or your head, bleed out and die, and your corpse flops to the ground as a ragdoll. You can also block.**
+**Current state: a voxel world with five modes, solo or online: Sandbox, Hide and seek, Arena (a knockout tournament with weapons, shields and armour in a colosseum), Zombies (hold a ruined priory against waves of the dead, buying weapons and opening doors with the points you earn) and Horror (mine ore in a pitch-dark cave with things in it that hunt you). You have a real body: you can be hurt, lose arms or your head, bleed out and die, and your corpse flops to the ground as a ragdoll. You can also block.**
 
 **Play:** https://pressflowed.github.io/test2/ (open it in the Meta Quest Browser and press Enter VR, or play on desktop)
 
@@ -53,6 +53,13 @@ Pick one on the start menu, or on the **Game** tab of the arm menu. Anyone in th
   - **What they leave behind:** now and then a glowing shape. Walk into it: **Death's Touch** (one blow kills, 30 s), **Double Points** (30 s), **Carpenter** (every window boarded up), **Holy Fire** (every one of them burns) or **Mend** (everyone whole again, quivers full).
   - **The bow** (the only thing that shoots): hold it in one hand, **squeeze grip beside it with the other** to take the string, pull back, and let go. The further you draw, the faster and harder the arrow. 24 arrows; buying the bow again fills the quiver for a third of the price. Arrows stick in walls.
   - Between rounds your arms grow back and your blood refills; your armour stays as dented as it was. Nothing in the priory can be smashed, and everyone is normal size.
+- **Horror:** the Deep, a big cave with no light but the lamp on your head. Alone or with friends. It runs by itself.
+  - **The camp:** you start at a lit camp with a pickaxe in your hand. The shop and the ore crusher are here, and the things in the cave will not come into it.
+  - **Mining:** swing the pickaxe's point into ore in the walls and floor (the speckled rock: copper, iron, gold, and glowing crystal). Only ore breaks; plain rock does not. Each bite drops lumps. Deeper caverns hold better ore: copper is worth $8 a lump, iron $15, gold $40, crystal $100.
+  - **The bag:** pick a lump up and put that hand **over your shoulder**: it goes in the bag (8 lumps to start with). With a mouse, picking a lump up puts it straight in.
+  - **Money:** back at the camp, put a hand on the **ore crusher** and squeeze grip to tip the whole bag in. You can also throw lumps into its hopper.
+  - **The shop** (hand on a sign, squeeze grip): steel pickaxe $150 and diamond pickaxe $600 (bigger bites, less waste), big bag $120 and huge bag $450 (16 and 28 lumps), bright lamp $200, **monster tracker** $250 (how far the nearest one is and which way, with a beep that quickens), climbing gloves $300 (you move faster), hard hat $180, and a spare pickaxe for nothing.
+  - **What hunts you:** two of them at first, up to four as you earn more. Big, pale, red-eyed, and faster than you. They wander from cavern to cavern, come to the noise of digging, and when one sees you it screams and runs you down. Get out of its sight and it goes to where it last saw you and looks about before it gives up. You can fight one off with the pickaxe, but they take a lot of killing and another comes in its place. Dying loses what is in your bag, not your money or upgrades.
 
 ### Voice chat
 - On the start menu, press **Turn on microphone** before you enter VR (the browser can only ask for permission there). Press it again to mute. In VR, the arm menu's **Game** tab has a mute button.
@@ -143,6 +150,8 @@ To change a surface texture, pick another file on [TextureTown](https://textures
 | `src/rounds.js` | Hide and seek round rules (run by the host) |
 | `src/arena.js` | The arena tournament: bracket, phases and who wins (run by the host). The times are in `ARENA` at the top |
 | `src/zombies.js` | The zombies game's rules (run by the host): rounds, the kinds of dead, points, buying, windows, tonics, power-ups, the chest and the trap. The numbers are in `ZOMBIES`, `KINDS`, `TONICS` and `POWERUPS` at the top |
+| `src/caves.js` | The horror mode's rules (run by the host): what ore is worth, the bag, the crusher, the shop. The monsters' numbers are in `DEEP` |
+| `src/cscene.js` | The camp in the cave: shop signs, the crusher, lanterns and the fire |
 | `src/zscene.js` | The parts of the priory that are not blocks: doors, boards, signs and what they sell, the chest, spikes, pick-ups and torches |
 | `src/nav.js` | How bots find their way: the map as a grid of half-metre squares, and "fields" that tell any number of bots which way to go at once |
 | `src/arrows.js` | Arrows in flight, and stuck in walls |
@@ -152,7 +161,7 @@ To change a surface texture, pick another file on [TextureTown](https://textures
 | `src/avatar.js` | The body you see: head follows the headset, IK arms, how the hand sits on the controller, and how wounds and missing arms are shown |
 | `src/body.js` | The rules for a body: blood, bleeding, arms and heads coming off, dying and coming back. All the numbers are in `BODY` at the top |
 | `src/bodyrig.js` | Where a body's joints are, and what a punch or a grab touched |
-| `src/bots.js` | The bots: how they pull themselves along with their hands (`GAITS`), and what each kind decides to do (dummy, gladiator, zombie) |
+| `src/bots.js` | The bots: how they pull themselves along with their hands (`GAITS`), and what each kind decides to do (dummy, gladiator, zombie, and the stalker of the horror mode) |
 | `src/gibs.js` | Body pieces (they are props): loose ones, and the jointed parts of a dead body |
 | `src/input-vr.js` / `src/input-desktop.js` | Headset + controllers / mouse + keyboard |
 | `src/props.js` | Physics props (cannon-es): types, spawning, grabbing, syncing, and the joints that hold a dead body together |

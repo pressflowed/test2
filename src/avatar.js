@@ -94,6 +94,7 @@ export class Avatar {
     const eye = new THREE.Mesh(eyesGeo(template), eyeMat);
     eye.frustumCulled = false;
     this.head.add(eye);
+    this.eyes = eye;
     mesh.Head_cap.visible = false;
     this.root.add(this.head);
     // a neck piece joins head and body, and closes the hole you would otherwise see looking down in first person
@@ -268,6 +269,12 @@ export class Avatar {
       a.upper.nub.visible = c === 1;                            // ...with the end of the bone in it
       a.socket.visible = c === 2;
     }
+  }
+
+  /** Eyes that glow in the dark (the things in the Deep have them): they show through fog and shadow. */
+  setEyes(hex) {
+    this.eyes.material = new THREE.MeshBasicMaterial({ color: hex, fog: false });
+    this.eyes.scale.setScalar(1.5);
   }
 
   /**

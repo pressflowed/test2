@@ -45,16 +45,17 @@ const LAYOUT = {
     { id: 'clear', rect: [620, 350, 200, 230], label: 'Clear props', danger: true },
   ],
   3: [
-    { id: 'mode:sandbox', rect: [20, 105, 199, 150], label: 'Sandbox' },
-    { id: 'mode:hideseek', rect: [220, 105, 199, 150], label: 'Hide and seek' },
-    { id: 'mode:arena', rect: [420, 105, 199, 150], label: 'Arena' },
-    { id: 'mode:zombies', rect: [620, 105, 200, 150], label: 'Zombies' },
+    { id: 'mode:sandbox', rect: [20, 105, 159, 150], label: 'Sandbox' },
+    { id: 'mode:hideseek', rect: [180, 105, 159, 150], label: 'Hide and seek' },
+    { id: 'mode:arena', rect: [340, 105, 159, 150], label: 'Arena' },
+    { id: 'mode:zombies', rect: [500, 105, 159, 150], label: 'Zombies' },
+    { id: 'mode:horror', rect: [660, 105, 160, 150], label: 'Horror' },
     // sandbox: bots and fighting in a row of their own
     { id: 'addbot', rect: [20, 318, 200, 126], only: 'sandbox' },
     { id: 'addknight', rect: [220, 318, 200, 126], only: 'sandbox' },
     { id: 'clearbots', rect: [420, 318, 200, 126], only: 'sandbox' },
     { id: 'pvp', rect: [620, 318, 200, 126], only: 'sandbox' },
-    { id: 'mic', rect: [20, 450, 300, 130], only: ['sandbox', 'hideseek', 'zombies'] },
+    { id: 'mic', rect: [20, 450, 300, 130], only: ['sandbox', 'hideseek', 'zombies', 'horror'] },
     { id: 'skip', rect: [520, 450, 300, 130], only: ['hideseek', 'zombies'] },
     // arena: everything along the bottom, under the bracket news
     { id: 'mic', rect: [20, 450, 196, 130], only: 'arena' },
@@ -305,10 +306,11 @@ export class ArmMenu {
       }
     } else {
       const here = LAYOUT[3].filter(b => !b.only || b.only.includes(s.mode)), B = id => here.find(b => b.id === id);
-      button(B('mode:sandbox'), 'Sandbox', null, s.mode === 'sandbox', 28);
-      button(B('mode:hideseek'), 'Hide & seek', null, s.mode === 'hideseek', 28);
-      button(B('mode:arena'), 'Arena', null, s.mode === 'arena', 28);
-      button(B('mode:zombies'), 'Zombies', null, s.mode === 'zombies', 28);
+      button(B('mode:sandbox'), 'Sandbox', null, s.mode === 'sandbox', 24);
+      button(B('mode:hideseek'), 'Hide & seek', null, s.mode === 'hideseek', 24);
+      button(B('mode:arena'), 'Arena', null, s.mode === 'arena', 24);
+      button(B('mode:zombies'), 'Zombies', null, s.mode === 'zombies', 24);
+      button(B('mode:horror'), 'Horror', null, s.mode === 'horror', 24);
       const lines = () => {
         g.textAlign = 'left';
         (s.game || []).forEach((t, i) => {
@@ -318,7 +320,10 @@ export class ArmMenu {
         g.textAlign = 'center';
       };
       const mic = s.mic || 'Mic off';
-      if (s.mode === 'zombies') {
+      if (s.mode === 'horror') {
+        lines();
+        button(B('mic'), mic, null, mic === 'Mic on');
+      } else if (s.mode === 'zombies') {
         lines();
         button(B('skip'), 'Start again');
         button(B('mic'), mic, null, mic === 'Mic on');

@@ -25,6 +25,9 @@ import { Nav } from './nav.js';
 import { PRIORY } from './maps.js';
 import { Horde, ZOMBIES, KINDS } from './zombies.js';
 import { Arrows } from './arrows.js';
+import { CAVE } from './maps.js';
+import { Mine, DEEP, ORES } from './caves.js';
+import { MATERIALS } from './voxels.js';
 import { hitPart } from './bodyrig.js';
 
 const SEND_EVERY = 0.05;     // 20 Hz
@@ -35,6 +38,7 @@ const GRAVITY_ORDER = ['normal', 'low', 'high'];
 const SKY_ORDER = ['day', 'sunset', 'night'];
 const MAX_PUNCH = 1.5;       // biggest dent a player may ask for, metres
 const BLAST_DENT = 1.6;      // crater from TNT
+const ORE_ONLY = m => !!MATERIALS[m].ore;      // what a pickaxe takes out of a wall
 const BODY_PARTS = ['head', 'torso', 'upperL', 'foreL', 'upperR', 'foreR'];
 const r3 = v => Math.round(v * 1000) / 1000;
 const DOWN = new THREE.Vector3(0, -1, 0);
@@ -64,6 +68,10 @@ export class Session {
     this.horde = new Horde();
     this.zombies = this.horde.public();      // the zombies game, as everyone sees it
     this.onZombies = () => {};  // (zombies, previousZombies) it moved on
+    this.mine = new Mine();
+    this.deep = this.mine.public();          // the horror mode's money and kit, as everyone sees it
+    this.onDeep = () => {};     // (deep, previousDeep) it changed
+    this._noises = []; this._lairT = 0; this._picked = new Set(); this._mineAt = new Map();
     this.arrows = new Arrows(scene);
     this._arrowN = 0; this._zField = null; this._zFieldT = 0; this._zDead = []; this._repairAt = new Map();
     this._zBarricades = PRIORY.windows.map((w, i) => ({ id: i, pos: new THREE.Vector3(w.x, PRIORY.floor + 1, w.z), nx: w.nx, nz: w.nz, boards: ZOMBIES.boards }));
@@ -142,6 +150,7 @@ export class Session {
       return (a.phase === 'prep' || a.phase === 'fight') && (a.a === id || a.b === id) ? 'fighter' : 'spectator';
     }
     if (this.settings.mode === 'zombies') { const p = this.zombies.pl[id]; return p && p[3] ? 'fallen' : 'survivor'; }
+    if (this.settings.mode === 'horror') return 'miner';
     const r = this.round;
     if (this.settings.mode !== 'hideseek' || r.phase === 'waiting') return 'free';
     if (r.giant === id) return 'giant';
@@ -234,10 +243,11 @@ export class Session {
     this.rounds.stop();
     this.tournament.stop();
     this.horde.reset();
+    this.mine.reset(); this._picked.clear(); this._noises.length = 0; this._lairT = 8;
     this.arrows.clear();
     this.loadMap(mode);
-    this._applySettings({ ...this.settings, gravity: 'normal', sky: mode === 'zombies' ? 'night' : this.settings.sky === 'night' && this._wasZ ? 'day' : this.settings.sky });
-    this._wasZ = mode === 'zombies';
+    this._applySettings({ ...this.settings, gravity: 'normal', sky: mode === 'zombies' || mode === 'horror' ? 'night' : this.settings.sky === 'night' && this._wasZ ? 'day' : this.settings.sky });
+    this._wasZ = mode === 'zombies' || mode === 'horror';
     this.net.broadcast({ t: 'map', mode, carves: [] });
   }
 
@@ -251,14 +261,14 @@ export class Session {
   _applyMap(msg) {
     if (msg.mode !== this.mode) this.loadMap(msg.mode);
     else this.voxels.reset();
-    for (const c of msg.carves || []) this.voxels.carve(c[0], c[1], c[2], c[3]);
+    for (const c of msg.carves || []) this.voxels.carve(c[0], c[1], c[2], c[3], c[4] ? ORE_ONLY : null);
   }
 
   // ---- breaking things
   /** May this player break blocks right now? */
   canBreak(id = this.myId) {
     if (this.settings.mode === 'hideseek') return this.round.phase === 'waiting' || (this.round.phase === 'hunt' && this.round.giant === id);
-    if (this.settings.mode === 'arena' || this.settings.mode === 'zombies') return false;       // the colosseum and the priory stay standing
+    if (this.settings.mode === 'arena' || this.settings.mode === 'zombies' || this.settings.mode === 'horror') return false;       // the colosseum and the priory stay standing
     return this.settings.smash;
   }
 
@@ -273,7 +283,7 @@ export class Session {
   }
 
   _carve(c, fx) {
-    const res = this.voxels.carve(c[0], c[1], c[2], c[3]);
+    const res = this.voxels.carve(c[0], c[1], c[2], c[3], c[4] ? ORE_ONLY : null);
     if (res) this._navDirty = true;       // the bots' map of where they can go is out of date
     if (res && fx) this.onCarve(new THREE.Vector3(c[0], c[1], c[2]), c[3], res);
     return res;
@@ -333,6 +343,7 @@ export class Session {
     if (p.avatar || !this.template) return;
     p.avatar = new Avatar(this.template, this.scene, { color: p.color, name: p.name });
     p.avatar.root.visible = false;
+    if (p.z === 'stalker') p.avatar.setEyes(0xff2a10);
   }
 
   _broadcastRoster() {
@@ -408,6 +419,7 @@ export class Session {
         if (msg.round) this._setRound(msg.round);
         if (msg.arena) this._setArena(msg.arena);
         if (msg.zombies) this._setZombies(msg.zombies);
+        if (msg.deep) this._setDeep(msg.deep);
         for (const b of msg.bodies || []) this.body(b[0]).apply(b.slice(1));
       } else if (msg.t === 'bfx') {
         this.onBodyFx(msg);
@@ -451,10 +463,15 @@ export class Session {
       case 'undo': { const p = props.lastOwnedBy(from); if (p) props.remove(p.id); break; }
       case 'grab': {
         const hand = this._handPose(from, msg.hand), p = props.props.get(msg.id);
-        if (hand && props.grab(msg.id, { key: `${from}:${msg.hand}`, pos: hand.pos, quat: hand.quat }) && p && p.owner === 'chest') { p.owner = 'rack'; p.life = Infinity; this.horde.took(); }
+        const took = hand && props.grab(msg.id, { key: `${from}:${msg.hand}`, pos: hand.pos, quat: hand.quat });
+        if (took && p && p.owner === 'chest') { p.owner = 'rack'; p.life = Infinity; this.horde.took(); }
+        if (took && p && p.type.ore) p.owner = from;          // whoever carries a lump to the crusher is paid for it
         break;
       }
       case 'buy': this._hostBuy(from, msg); break;
+      case 'mine': this._hostMine(from, msg); break;
+      case 'stow': this._hostStow(from, msg); break;
+      case 'camp': this._hostCamp(from, msg); break;
       case 'repair': this._hostRepair(from, msg); break;
       case 'shoot': this._hostShoot(from, msg); break;
       case 'wear': {
@@ -851,6 +868,159 @@ export class Session {
     return false;
   }
 
+  // ------------------------------------------------------------------ horror (host)
+  _setDeep(st) {
+    const key = JSON.stringify(st);
+    if (key === this._dKey) return;
+    const prev = this.deep;
+    this._dKey = key;
+    this.deep = st;
+    this.onDeep(st, prev);
+  }
+  /** Swing a pickaxe (in `hand`) into the rock at a point: ore there comes out. */
+  dig(point, hand) { this.request({ t: 'mine', p: point.toArray().map(r3), hand }); }
+  /** Put the lump of ore in `hand` into my bag. */
+  stow(hand) { this.request({ t: 'stow', hand }); this.held[hand] = null; }
+  /** At the camp: 'sell' (tip my bag into the crusher), or the name of something in the shop. */
+  camp(what, hand = 1) { this.request({ t: 'camp', what, hand }); }
+
+  // a player starts (and comes back from the dead) with a pickaxe in their right hand
+  _givePick(id) {
+    const pose = this.poses.get(id);
+    if (!pose || this.weaponIn(id, 0) || this.weaponIn(id, 1)) return;
+    const h = pose.hands[1], p = this.props.spawn('pickaxe', h.pos.clone(), null, { owner: 'rack', color: this.mine.pick(id) ? 1 : 0 });
+    if (p && this.props.grab(p.id, { key: `${id}:1`, pos: h.pos, quat: h.quat })) {
+      if (id === this.myId) this.held[1] = p.id; else this.net.sendTo(id, { t: 'given', hand: 1, id: p.id });
+    }
+  }
+
+  _stepHorror(dt) {
+    const M = DEEP.monster, prey = [], ids = [], now = performance.now();
+    for (const [id, pose] of this.poses) {
+      if (this.isBot(id)) continue;
+      ids.push(id);
+      const b = this.body(id);
+      if (b.dead) continue;
+      prey.push({ id, pos: pose.head.pos, safe: Math.hypot(pose.head.pos.x - CAVE.camp.x, pose.head.pos.z - CAVE.camp.z) < CAVE.camp.r });
+      if (!this._picked.has(id)) { this._picked.add(id); this._givePick(id); }
+    }
+    this.mine.keep(ids);
+    this._noises = this._noises.filter(n => now - n.t < 8000);
+    // as many of them as the money made so far calls for; they come up in the deep, far from anyone
+    let alive = 0;
+    for (const id of this.bots.keys()) if (this.isZombie(id) && !this.body(id).dead) alive++;
+    this._lairT -= dt;
+    if (prey.length && alive < DEEP.monsters(this.mine.state.earned) && this._lairT <= 0) {
+      let best = null, bd = -1;
+      for (const n of CAVE.nodes) {
+        if (n.depth < 2) continue;
+        let d = Infinity;
+        for (const p of prey) d = Math.min(d, Math.hypot(n.x - p.pos.x, n.z - p.pos.z));
+        d += Math.random() * 6;
+        if (d > bd) { bd = d; best = n; }
+      }
+      if (best) this._spawnStalker(best);
+      this._lairT = 12;
+    }
+    // what each of them can see, and the way to wherever it is going
+    const nav = this._getNav(), dir = new THREE.Vector3();
+    for (const [id, bot] of this.bots) {
+      if (bot.brain !== 'stalker') continue;
+      bot._seeT = (bot._seeT || 0) - dt;
+      if (bot._seeT <= 0) {
+        bot._seeT = 0.2; bot._sees = {};
+        for (const p of prey) {
+          const d = p.pos.distanceTo(bot.loco.head);
+          bot._sees[p.id] = !p.safe && d < M.sight && (d < 0.6 || !this.voxels.raycast(bot.loco.head, dir.copy(p.pos).sub(bot.loco.head).divideScalar(d), d - 0.3));
+        }
+      }
+      if (bot.want) {
+        const key = Math.round(bot.want.x * 2) + ',' + Math.round(bot.want.z * 2);
+        bot._fT = (bot._fT || 0) - dt;
+        if (key !== bot._fKey || bot._fT <= 0) { bot._hfield = nav.field([bot.want], bot._hfield); bot._fKey = key; bot._fT = bot.mood === 'chase' ? 0.35 : 4; }
+      }
+      bot.hctx = { prey: prey.map(p => ({ id: p.id, pos: p.pos, safe: p.safe, seen: !!(bot._sees && bot._sees[p.id]) })), noises: this._noises, nodes: CAVE.nodes, M, field: bot._hfield || null };
+    }
+    // lumps of ore that have landed in the crusher's hopper
+    const [x0, y0, z0, x1, y1, z1] = CAVE.crusher.hopper;
+    for (const p of [...this.props.props.values()]) {
+      const at = p.mesh.position;
+      if (!p.type.ore || p.held || at.x < x0 || at.x > x1 || at.y < y0 - 0.6 || at.y > y1 || at.z < z0 || at.z > z1) continue;
+      const by = typeof p.owner === 'string' && this.mine.state.pl[p.owner] ? p.owner : null;
+      const got = this.mine.crush(by, p.type.ore);
+      this.props.remove(p.id);
+      this._fx({ k: 'crunch', by, got, p: CAVE.crusher.pos });
+    }
+  }
+
+  _spawnStalker(node) {
+    const M = DEEP.monster, id = 'm' + (++this._botN), c = CAVE.at(node.x, node.z);
+    const bot = new Bot(id, this._botN, this.world, new THREE.Vector3(node.x, (c ? c.floor : 1) - 0.6, node.z), { name: '', color: M.color, brain: 'stalker', pace: 'run', reach: M.reach, hitEvery: M.hitEvery, scale: M.scale, tag: 'stalker' });
+    bot.dmg = M.dmg; bot.tough = M.tough;
+    this.bots.set(id, bot);
+    const p = { id, name: '', color: bot.color, state: packState(bot.pose), bot: true, z: 'stalker' };
+    this.players.set(id, p);
+    this._ensureAvatar(p);
+    this._broadcastRoster();
+    return bot;
+  }
+
+  _hostMine(from, msg) {
+    const hand = msg.hand ? 1 : 0, held = this.weaponIn(from, hand), pose = this.poses.get(from), now = performance.now();
+    if (this.settings.mode !== 'horror' || !held || !held.type.weapon.pick || !pose || this.body(from).dead) return;
+    if (!Array.isArray(msg.p) || msg.p.length !== 3 || !msg.p.every(Number.isFinite) || now - (this._mineAt.get(from) || 0) < 220) return;
+    const at = new THREE.Vector3().fromArray(msg.p);
+    if (at.distanceTo(pose.head.pos) > 3) return;
+    this._mineAt.set(from, now);
+    const r = DEEP.bite[this.mine.pick(from)], V = 0.25, count = {};
+    // what is there to take? (only ore comes away: the rock stays where it is)
+    for (let y = at.y - r; y <= at.y + r; y += V) for (let z = at.z - r; z <= at.z + r; z += V) for (let x = at.x - r; x <= at.x + r; x += V) {
+      if ((x - at.x) ** 2 + (y - at.y) ** 2 + (z - at.z) ** 2 > r * r) continue;
+      const m = this.voxels.matAt(x, y, z), ore = m ? MATERIALS[m].ore : null;
+      if (ore) count[ore] = (count[ore] || 0) + 1;
+    }
+    this._noises.push({ pos: at.clone(), t: now });          // and whatever is down here hears it
+    if (!Object.keys(count).length) return;
+    this._hostCarve([r3(at.x), r3(at.y), r3(at.z), r, 1]);
+    const out = pose.head.pos.clone().sub(at).setY(0).normalize();
+    for (const [ore, n] of Object.entries(count)) {
+      for (let k = this.mine.dug(from, ore, n); k > 0; k--) {
+        const p = this.props.spawn('ore_' + ore, at.clone().addScaledVector(out, 0.25).add(new THREE.Vector3((Math.random() - 0.5) * 0.2, 0.1, (Math.random() - 0.5) * 0.2)), null,
+          { owner: from, vel: out.clone().multiplyScalar(1 + Math.random()).add(new THREE.Vector3((Math.random() - 0.5), 1.5 + Math.random(), (Math.random() - 0.5))) });
+        if (p) p.life = 240;
+      }
+    }
+  }
+
+  _hostStow(from, msg) {
+    const hand = msg.hand ? 1 : 0, key = `${from}:${hand}`;
+    const p = [...this.props.props.values()].find(x => x.held && x.held.key === key && x.type.ore);
+    if (this.settings.mode !== 'horror' || !p) return;
+    const tell = e => { if (from === this.myId) this.onBodyFx(e); else this.net.sendTo(from, { t: 'bfx', ...e }); };
+    if (!this.mine.stow(from, p.type.ore)) { this.props.release(p.id); return tell({ k: 'nocamp', why: 'Your bag is full' }); }
+    this.props.remove(p.id);
+    tell({ k: 'stow', ore: p.type.ore });
+  }
+
+  _hostCamp(from, msg) {
+    const pose = this.poses.get(from), body = this.body(from);
+    if (this.settings.mode !== 'horror' || !pose || body.dead || typeof msg.what !== 'string') return;
+    if (Math.hypot(pose.head.pos.x - CAVE.camp.x, pose.head.pos.z - CAVE.camp.z) > CAVE.camp.r + 3) return;
+    const tell = e => { if (from === this.myId) this.onBodyFx(e); else this.net.sendTo(from, { t: 'bfx', ...e }); };
+    if (msg.what === 'sell') {
+      const got = this.mine.sell(from);
+      if (got > 0) this._fx({ k: 'crunch', by: from, got, p: CAVE.crusher.pos });
+      return;
+    }
+    if (msg.what === 'hat' && body.armour[0] > 0) return tell({ k: 'nocamp', why: 'You are wearing one' });
+    const res = this.mine.buy(from, msg.what);
+    if (!res.ok) return tell({ k: 'nocamp', why: res.why });
+    if (res.key === 'hat') body.wear(0);
+    else if (res.key === 'pick') this._givePick(from);
+    else if (res.key === 'pick2' || res.key === 'pick3') { for (const h of [0, 1]) { const w = this.weaponIn(from, h); if (w && w.type.weapon.pick) this.props.forge(w); } }
+    this._fx({ k: 'bought', by: from, key: res.key, p: pose.head.pos.toArray().map(r3) });
+  }
+
   // put a weapon (or a shield) straight into a bot's hand
   _arm(id, type, hand) {
     const bot = this.bots.get(id);
@@ -888,6 +1058,7 @@ export class Session {
     if (this._navFor !== this.mode || (this._navDirty && this._navT <= 0)) {
       this.nav.build();
       this._navFor = this.mode; this._navDirty = false; this._navT = 8;
+      if (this.mode === 'horror') { const c = CAVE.camp; this.nav.block({ x: c.x - c.r, z: c.z - c.r }, { x: c.x + c.r, z: c.z + c.r + 2 }, true); }
       this.onNav(this.nav);
     }
     return this.nav;
@@ -895,6 +1066,7 @@ export class Session {
 
   // something a bot did, other than land a blow
   _botEvent(id, bot, e) {
+    if (e.type === 'spot') { this._fx({ k: 'spot', id, target: e.target, p: bot.loco.head.toArray().map(r3) }); return; }
     if (e.type === 'tear') {
       const left = this.horde.tear(e.id), w = PRIORY.windows[e.id];
       this._fx({ k: 'tear', i: e.id, n: left, p: [w.x, PRIORY.floor + 1, w.z] });
@@ -926,7 +1098,7 @@ export class Session {
   _botStrike(id, held, foe) {
     const ap = this.poses.get(id), tp = this.poses.get(foe), tb = this.bodies.get(foe), body = this.body(id);
     if (!this.mayHurt(id, foe) || !ap || !tp || !(body.canUse(0) || body.canUse(1))) return;
-    const zb = this.bots.get(id), far = zb && zb.brain === 'zombie' ? zb.reach * ap.scale : this._reach(held);
+    const zb = this.bots.get(id), far = zb && (zb.brain === 'zombie' || zb.brain === 'stalker') ? zb.reach * ap.scale : this._reach(held);
     if (ap.head.pos.distanceTo(tp.head.pos) > far + 0.3) return;        // they got away
     const w = held && held.type.weapon;
     const hand = Number(held ? held.held.key.split(':')[1] : body.canUse(1) ? 1 : 0);
@@ -1026,6 +1198,7 @@ export class Session {
     if (this.settings.mode === 'arena') { const a = this.arena; return a.phase === 'fight' && ((a.a === by && a.b === id) || (a.b === by && a.a === id)); }
     // zombies: the living and the dead hurt each other, and nobody hurts their own side
     if (this.settings.mode === 'zombies') return this.isZombie(by) !== this.isZombie(id) && this.zombies.phase !== 'over';
+    if (this.settings.mode === 'horror') return this.isZombie(by) !== this.isZombie(id);        // you and what hunts you
     return false;
   }
   canHurt(id) { return this.mayHurt(this.myId, id); }
@@ -1092,6 +1265,7 @@ export class Session {
   _harm(from, id, part, dmg, kind, ctx, forged = false) {
     const tb = this.body(id), zombie = this.settings.mode === 'zombies' && this.isZombie(id), bot = this.bots.get(id);
     if (zombie && bot) { dmg *= this.horde.power(from, forged) / (bot.tough || 1); bot.lastBy = from; }
+    else if (this.settings.mode === 'horror' && bot) dmg /= bot.tough || 1;
     const events = tb.hit(part, dmg, kind);
     if (zombie && events.length) this.horde.hit(from);
     this._bodyEvents(id, events, { by: from, hand: ctx.hand ?? -1, dir: ctx.dir, push: Math.min(dmg / 10, 4.5) * (ctx.knock || 1), sharp: kind.sharp, blunt: kind.blunt });
@@ -1156,6 +1330,10 @@ export class Session {
         whole: S.clone().addScaledVector(dAll, (RIG.upper + RIG.fore + RIG.hand) * s / 2),
       };
     };
+    if (this.settings.mode === 'horror' && events.some(e => e.type === 'die')) {
+      if (this.isZombie(id)) { if (!this._zDead.includes(id)) this._zDead.push(id); this._lairT = DEEP.monster.back; }       // (another comes, after a while)
+      else if (this.mine.died(id)) this._fx({ k: 'spilt', id, p: arr(rig.head) });
+    }
     if (this.settings.mode === 'zombies' && events.some(e => e.type === 'die')) {
       const body = this.body(id);
       if (this.isZombie(id)) this._zKilled(id, ctx, rig, events.some(e => e.type === 'behead'));
@@ -1230,6 +1408,7 @@ export class Session {
           const T = this.tournament.state;
           this._seatBots(T.phase === 'prep' || T.phase === 'fight' ? T : null, id);
         } else if (bot) { bot.respawn(); this._kitOut(id); }
+        else if (this.settings.mode === 'horror') this._picked.delete(id);      // back at the camp, with a pickaxe in hand again
         this._fx({ k: 'respawn', id });
       }
     }
@@ -1396,6 +1575,7 @@ export class Session {
         const ctx = { nav, crowd: heads.filter(h => h !== bot.loco.head) };
         let foeId = null;
         if (bot.brain === 'zombie') Object.assign(ctx, this._zctx);
+        else if (bot.brain === 'stalker') Object.assign(ctx, bot.hctx || {});
         else if (arena) {
           foeId = T.phase === 'fight' && (T.a === id || T.b === id) ? (T.a === id ? T.b : T.a) : null;
           const foe = foeId ? poses.get(foeId) : null;
@@ -1413,7 +1593,7 @@ export class Session {
           for (const [pid, pose] of poses) { if (this.isBot(pid) || this.body(pid).dead) continue; const d = pose.head.pos.distanceTo(bot.loco.head); if (d < bd) { bd = d; ctx.near = pose.head.pos; } }
         }
         bot.step(dt, body, this._pullerOf(id), ctx);
-        const target = bot.brain === 'zombie' ? bot.target : foeId;
+        const target = bot.brain === 'zombie' || bot.brain === 'stalker' ? bot.target : foeId;
         // while it swings, see whether the blow runs into what its target is holding
         if (bot.swing > 0 && !bot.caught && target && this.rigs.has(id)) {
           const w = held && held.type.weapon, hp = bot.pose.hands[bot.weaponHand >= 0 ? bot.weaponHand : 1].pos;
@@ -1515,6 +1695,8 @@ export class Session {
       this._setArena(this.tournament.public());
       if (this.settings.mode === 'zombies') this._stepZombies(dt);
       this._setZombies(this.horde.public());
+      if (this.settings.mode === 'horror') this._stepHorror(dt);
+      this._setDeep(this.mine.public());
       this.arrows.update(dt, this.world, (from, to, a) => this._arrowHit(from, to, a));
       this._stepBodies(dt);
       // the dead that have been put down are cleared away once their bodies have dropped
@@ -1601,7 +1783,7 @@ export class Session {
         for (const p of this.players.values()) if (p.state) players.push([p.id, ...p.state]);
         const bodies = [];
         for (const id of poses.keys()) bodies.push([id, ...this.body(id).pack()]);
-        this.net.broadcast({ t: 'snap', players, ...props.snapshot(), settings: this.settings, round: this.round, arena: this.arena, zombies: this.settings.mode === 'zombies' ? this.zombies : null, bodies });
+        this.net.broadcast({ t: 'snap', players, ...props.snapshot(), settings: this.settings, round: this.round, arena: this.arena, zombies: this.settings.mode === 'zombies' ? this.zombies : null, deep: this.settings.mode === 'horror' ? this.deep : null, bodies });
       } else {
         this.net.send({ t: 'state', s: mine });
       }

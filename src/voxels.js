@@ -30,6 +30,11 @@ export const MATERIALS = [
   { name: 'dirt', tex: 'dirt', tile: 2, tint: 0xffffff, hard: 1.3, kind: 'grass', color: 0x623e33 },
   { name: 'sand', tex: 'sand', tile: 2.5, tint: 0xffffff, hard: 1.5, kind: 'grass', color: 0xdfb16b },
   { name: 'marble', tex: 'marble', tile: 3, tint: 0xffffff, hard: 0.7, kind: 'stone', color: 0xd3c0a4 },
+  // ores (the horror mode's cave): `ore` is what digging them gives
+  { name: 'copper', tex: 'copper', tile: 2, tint: 0xffffff, hard: 0.8, kind: 'rock', color: 0xc8703a, ore: 'copper' },
+  { name: 'iron', tex: 'iron', tile: 2, tint: 0xffffff, hard: 0.8, kind: 'rock', color: 0xb9b2aa, ore: 'iron' },
+  { name: 'gold', tex: 'gold', tile: 2, tint: 0xffffff, hard: 0.8, kind: 'rock', color: 0xf2cf4a, ore: 'gold' },
+  { name: 'crystal', tex: 'crystal', tile: 2, tint: 0xffffff, hard: 0.8, kind: 'stone', color: 0x7ff0f5, ore: 'crystal' },
 ];
 export const MAT = { air: 0 };
 MATERIALS.forEach((m, i) => { if (m) MAT[m.name] = i; });
@@ -264,7 +269,7 @@ export class VoxelWorld {
    * { count, collapsed, samples: [[x, y, z, mat], ...] } where samples are a few of the
    * broken blocks (for debris).
    */
-  carve(wx, wy, wz, r) {
+  carve(wx, wy, wz, r, only = null) {
     const { nx, ny, nz, data, layer } = this;
     const fx = (wx - this.ox) / VOXEL, fy = (wy - this.oy) / VOXEL, fz = (wz - this.oz) / VOXEL, rv = r / VOXEL;
     const reach = rv * 1.2;
@@ -274,7 +279,7 @@ export class VoxelWorld {
     const removed = [];
     for (let j = j0; j <= j1; j++) for (let k = k0; k <= k1; k++) for (let i = i0; i <= i1; i++) {
       const v = i + nx * (k + nz * j);
-      if (!data[v]) continue;
+      if (!data[v] || (only && !only(data[v] & ID))) continue;        // (only: a test of the material, so that a pickaxe takes ore and leaves the rock)
       const dx = i + 0.5 - fx, dy = j + 0.5 - fy, dz = k + 0.5 - fz;
       const rr = rv * (0.82 + 0.36 * hash(i, j, k));     // ragged edge, the same for everyone
       if (dx * dx + dy * dy + dz * dz < rr * rr) removed.push(v);

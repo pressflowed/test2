@@ -42,6 +42,23 @@ function speckle(g, s, r, n, colors, minR, maxR, alpha = 0.5) {
   g.globalAlpha = 1;
 }
 
+// rock (the photo if there is one) with nuggets of ore scattered through it; `shards` makes them angular
+function ore(g, s, seed, colors, n, shards = false) {
+  if (photos.rock) g.drawImage(photos.rock, 0, 0, s, s); else PAINT.rock(g, s);
+  g.fillStyle = 'rgba(0,0,0,.28)'; g.fillRect(0, 0, s, s);
+  const r = rng(seed);
+  for (let i = 0; i < n; i++) {
+    const x = r() * s, y = r() * s, rad = s * (0.025 + r() * 0.045), col = colors[Math.floor(r() * colors.length)], a = r() * 6;
+    wrap(s, x, y, rad * 2, (px, py) => {
+      g.fillStyle = col; g.beginPath();
+      const k = shards ? 4 : 7;
+      for (let j = 0; j < k; j++) { const t = a + j / k * 6.283, rr = rad * (shards ? (j % 2 ? 0.45 : 1.3) : 0.7 + 0.5 * ((j * 7 + i) % 3) / 2); j ? g.lineTo(px + Math.cos(t) * rr, py + Math.sin(t) * rr) : g.moveTo(px + Math.cos(t) * rr, py + Math.sin(t) * rr); }
+      g.fill();
+      g.fillStyle = 'rgba(255,255,255,.5)'; g.beginPath(); g.arc(px - rad * 0.25, py - rad * 0.25, rad * 0.22, 0, 7); g.fill();
+    });
+  }
+}
+
 const PAINT = {
   grass(g, s) {
     const r = rng(11);
@@ -220,6 +237,11 @@ const PAINT = {
   },
 
   // ---- props (not tiled across the world, drawn once per face or wrapped round)
+  // ores: the cave's rock, with what is worth digging for showing in it
+  copper(g, s) { ore(g, s, 311, ['#c8703a', '#e08a4a', '#8a4a22', '#3f8f7a'], 26); },
+  iron(g, s) { ore(g, s, 313, ['#b9b2aa', '#8f8780', '#6e4a3a', '#d6d0c8'], 30); },
+  gold(g, s) { ore(g, s, 317, ['#f2cf4a', '#ffe680', '#c99a1e', '#fff3b0'], 22); },
+  crystal(g, s) { ore(g, s, 331, ['#7ff0f5', '#c8ffff', '#3fb8d8', '#ffffff'], 20, true); },
   ball(g, s) {
     g.fillStyle = '#e0523a'; g.fillRect(0, 0, s, s);
     g.fillStyle = '#f6efe2'; g.fillRect(0, s * 0.42, s, s * 0.16);

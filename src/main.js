@@ -7,7 +7,7 @@ import { Locomotion } from './locomotion.js';
 import { Avatar, SKIN, fingertip } from './avatar.js';
 import { DesktopInput } from './input-desktop.js';
 import { VRInput } from './input-vr.js';
-import { initAudio, tap, boom, boing, crunch, jingle, thump, heartbeat, smack, tear, squelch, crack, clang, groan, twang } from './audio.js';
+import { initAudio, tap, boom, boing, crunch, jingle, thump, heartbeat, smack, tear, squelch, crack, clang, groan, twang, growl, screech } from './audio.js';
 import { Voice } from './voice.js';
 import { buildScenery, lightButton } from './sandbox.js';
 import { SPAWNABLE, propVisual, propSize, BLAST_RADIUS, weaponHold } from './props.js';
@@ -30,7 +30,8 @@ import { MAPS, COLOSSEUM } from './maps.js';
 import { ROUND } from './rounds.js';
 import { Hud } from './hud.js';
 import { loadTextures } from './textures.js';
-import { PRIORY } from './maps.js';
+import { PRIORY, CAVE } from './maps.js';
+import { UPGRADES, ORES, DEEP, campNear } from './caves.js';
 import { ZOMBIES, TONICS, POWERUPS, KINDS, within } from './zombies.js';
 
 const $ = id => document.getElementById(id);
@@ -138,7 +139,7 @@ let jumps = 0;                   // how many times the movement code has telepor
 let calmUntil = 0;               // no punch or swing counts until this time (ms): I have just been moved
 // what blood and bits land on: the ground, and the walls and ceilings of the block world
 const bloodWorld = { grid: VOXEL, groundAt: (x, y, z) => Math.max(0, voxels.groundBelow(x, y, z)), solidAt: (x, y, z) => voxels.solidAt(x, y, z) };
-const MODES = ['sandbox', 'hideseek', 'arena', 'zombies'];
+const MODES = ['sandbox', 'hideseek', 'arena', 'zombies', 'horror'];
 // How much damage a punch does to someone my own size: harder with speed, much harder if I am big.
 const punchPower = (v, s) => Math.min(Math.max((v - 1.5) * 9, 6), 60) * s ** 1.5;
 
@@ -170,6 +171,13 @@ function randomName() {
   return a[Math.floor(Math.random() * a.length)] + Math.floor(10 + Math.random() * 90);
 }
 
+// ---- the horror mode's light: a lamp on your head, pointing where you look
+const lamp = new THREE.SpotLight(0xfff0d0, 55, 23, 0.5, 0.55, 1.5);
+lamp.visible = false;
+scene.add(lamp, lamp.target);
+let wasDeep = false;
+const hasUp = key => { const me = session.deep.pl[session.myId], i = Object.keys(UPGRADES).indexOf(key); return !!me && (me[1] & (1 << i)) !== 0; };
+
 // ---- size, power and the things that depend on them
 function applyView() {
   const s = loco.scale, p = SKIES[session.settings.sky] || SKIES.day;
@@ -177,16 +185,27 @@ function applyView() {
   // fog and draw distance are measured in "player units", so adjust them for size
   scene.fog.near = 35 / s; scene.fog.far = p.fogFar / s;
   if (session.settings.mode === 'zombies') { scene.fog.near = 9; scene.fog.far = 46; }       // the priory is a murky place
-  camera.far = 260 / Math.min(s, 1);
+  const deep = session.settings.mode === 'horror';
+  if (deep) {
+    // the Deep: no light but what you carry, and the dark closes in a little way off
+    const bright = hasUp('lamp2');
+    scene.fog.color.setHex(0x000000); scene.background = new THREE.Color(0x000000);
+    scene.fog.near = 1; scene.fog.far = bright ? 30 : 21;
+    hemi.intensity = 0.045; sun.intensity = 0;
+    lamp.distance = bright ? 34 : 23; lamp.angle = bright ? 0.72 : 0.5; lamp.intensity = bright ? 95 : 55;
+  } else if (wasDeep) { sky.name = null; sky.set(session.settings.sky); scene.fog.near = 35 / s; scene.fog.far = p.fogFar / s; }
+  wasDeep = deep;
+  lamp.visible = deep;
+  camera.far = deep ? 44 : 260 / Math.min(s, 1);
   camera.updateProjectionMatrix();
 }
 // Your size and power come from the arm menu, unless a hide and seek round gives you a role.
 function applySizing() {
   const role = session.role();
-  const zomb = role === 'survivor' || role === 'fallen', mine = session.zombies.pl[session.myId];
-  const plain = role === 'ghost' || role === 'fighter' || role === 'spectator' || zomb;     // everyone is the same size in the arena and the priory
+  const zomb = role === 'survivor' || role === 'fallen', mine = session.zombies.pl[session.myId], miner = role === 'miner';
+  const plain = role === 'ghost' || role === 'fighter' || role === 'spectator' || zomb || miner;     // everyone is the same size in the arena and the priory
   const scale = role === 'giant' ? ROUND.giantScale : role === 'hider' ? ROUND.hiderScale : plain ? 1 : SIZES[sizeIdx];
-  loco.power = role === 'giant' ? ROUND.giantPower : role === 'hider' ? ROUND.hiderPower : zomb && mine && (mine[1] & TONICS.hare.bit) ? 1.35 : plain ? 1 : POWERS[powerIdx];
+  loco.power = role === 'giant' ? ROUND.giantPower : role === 'hider' ? ROUND.hiderPower : zomb && mine && (mine[1] & TONICS.hare.bit) ? 1.35 : miner && hasUp('gloves') ? 1.3 : plain ? 1 : POWERS[powerIdx];
   if (loco.scale !== scale) { loco.setScale(scale, headLocal); applyView(); }
 }
 function setSize(i) {
@@ -289,7 +308,9 @@ function renderRoom() {
       ? 'A knockout tournament in a colosseum. Two fighters at a time pick weapons in their own rooms, then the gates open. Bots fill in if you are alone.'
       : session.settings.mode === 'zombies'
         ? 'Hold a ruined priory against waves of the dead, alone or together. Points from blows and kills buy weapons, armour and doors.'
-        : 'Build, spawn props, smash things and fight freely.';
+        : session.settings.mode === 'horror'
+          ? 'A mine in the dark. Dig ore with your pickaxe, carry it back to the crusher, buy better kit. You are not alone down there.'
+          : 'Build, spawn props, smash things and fight freely.';
 }
 session.onChange = () => { renderRoom(); voice.sync(session.peers); };
 voice.onChange = renderRoom;
@@ -310,6 +331,32 @@ session.onBleed = (pos, dir, spurt, sc = 1) => {
   if (spurt) blood.spray(pos, dir, 16, 2.8 * Math.sqrt(sc), 0.02 * sc, 0.3);
   else blood.spray(pos, null, 2, 0.7, 0.016 * sc);
 };
+// Things that happen in the Deep. Returns true if it was one of them.
+function deepFx(e) {
+  const at = e.p ? new THREE.Vector3().fromArray(e.p) : null, vol = at ? Math.min(1, 6 / (at.distanceTo(loco.head) + 3)) : 1, mine = e.by === session.myId;
+  if (e.k === 'spot') {
+    // one of them has seen somebody: everyone near hears it; whoever it saw feels it
+    screech(Math.min(1, 9 / (at.distanceTo(loco.head) + 4)));
+    if (e.target === session.myId) { hud.hurt(0.35); dread = 6; for (let i = 0; i < 2; i++) vr.pulse(i, 1, 400); }
+  } else if (e.k === 'crunch') {
+    level.camp.crunch(); crunch('rock', vol); crunch('stone', vol * 0.8);
+    if (mine && e.got) { jingle([784, 988, 1319], 0.6); hud.flash(`+$${e.got}`, '', 1.6, '#ffd76a'); }
+  } else if (e.k === 'stow') {
+    tap('rock', 0.6, 0); jingle([660], 0.25);
+    for (let i = 0; i < 2; i++) vr.pulse(i, 0.4, 40);
+  } else if (e.k === 'bought') {
+    if (!mine) return true;
+    jingle([784, 988, 1175], 0.6);
+    hud.flash(UPGRADES[e.key].label, UPGRADES[e.key].text, 3.5, '#ffd76a');
+    applySizing(); applyView();
+  } else if (e.k === 'nocamp') {
+    hud.flash(e.why, '', 1.4, '#ff5a4a'); tap('metal', 0.5, 0);
+  } else if (e.k === 'spilt') {
+    if (e.id === session.myId) hud.flash('You died', 'What was in your bag is gone', 5, '#ff5a4a');
+  } else return false;
+  return true;
+}
+
 // Things that happen in the zombies game. Returns true if it was one of them.
 function zombieFx(e) {
   const at = e.p ? new THREE.Vector3().fromArray(e.p) : null, vol = at ? Math.min(1, 5 / (at.distanceTo(loco.head) + 3)) : 1, mine = e.by === session.myId;
@@ -371,7 +418,7 @@ function sparks(p, n = 8) {
   debris.burst(Array.from({ length: n }, () => [p.x + (Math.random() - 0.5) * 0.06, p.y + (Math.random() - 0.5) * 0.06, p.z + (Math.random() - 0.5) * 0.06, [0xfff2a8, 0xffd060, 0xffffff][Math.floor(Math.random() * 3)]]), p, 0.022, GRAVITY[session.settings.gravity]);
 }
 session.onBodyFx = e => {
-  if (zombieFx(e)) return;
+  if (zombieFx(e) || deepFx(e)) return;
   if (e.k === 'wear') {
     if (e.id === session.myId) {
       hud.flash(`${ARMOUR[SLOTS[e.slot]].label} on`, e.slot ? 'It takes the blows to your body, until it is knocked off' : 'It takes the blows to your head, until it is knocked off', 3.5);
@@ -546,12 +593,14 @@ session.onZombies = (st, prev) => {
   }
   // doors opening and windows mended or broken make themselves heard through their own messages (see onBodyFx)
 };
+session.onDeep = (st, prev) => { const a = st.pl[session.myId], b = prev.pl[session.myId]; if (a && (!b || a[1] !== b[1])) { applySizing(); applyView(); } };
 session.onMap = mode => {
   level.setMap(mode);
   level.bracket.draw(session.arena, id => session.nameOf(id), '');
   blood.clear();
   if (carry) { scene.remove(carry.mesh); carry = null; }
   applySizing();
+  applyView();
   respawn();
 };
 session.onCarve = (pos, radius, res) => {
@@ -735,6 +784,19 @@ function heldWeapon(i) {
 }
 
 // My hands against other bodies: a fast hand (or weapon) landing on someone hurts them.
+// the Deep: digging, the bag, and the camp
+const lastDig = [0, 0], digPt = new THREE.Vector3();
+// The nearest ore to a point, within `reach` metres (a pick that lands just beside a vein still bites it): a Vector3 or null.
+function oreNear(at, reach = 0.3) {
+  let best = null, bd = Infinity;
+  for (let y = -reach; y <= reach; y += VOXEL) for (let z = -reach; z <= reach; z += VOXEL) for (let x = -reach; x <= reach; x += VOXEL) {
+    const m = voxels.matAt(at.x + x, at.y + y, at.z + z), d = x * x + y * y + z * z;
+    if (m && MATERIALS[m].ore && d < bd) { bd = d; best = new THREE.Vector3(at.x + x, at.y + y, at.z + z); }
+  }
+  return best;
+}
+let cNear = null, lastCamp = 0, growlT = 3, stepT = 0, beepT = 0, dread = 0;
+
 // the priory: what is in reach to buy or mend; and the bow
 let zNear = null, lastBuy = 0, lastMend = 0, lastShot = 0, groanT = 2;
 let nock = null;                 // { hand, pull (0..1) } while my other hand has the bowstring
@@ -805,6 +867,18 @@ function fight(now) {
       while (hist.length > 5) hist.shift();
       const v = velocityOf(hist).length() / s;
       meetGuards(i, hp, pt, was, w.r, v, now);
+      // a pickaxe swung into ore takes a bite out of it (rock just rings)
+      if (w.pick && session.settings.mode === 'horror' && v > 2.2 && now - lastDig[i] > 300) {
+        for (const [x, y] of w.hits) {
+          digPt.set(x, y, 0).applyQuaternion(q).add(base);
+          const m = voxels.matAt(digPt.x, digPt.y, digPt.z);
+          if (!m) continue;
+          lastDig[i] = now;
+          const vein = oreNear(digPt, 0.25);
+          if (vein) { session.dig(vein, i); vr.pulse(i, 1, 110); } else { tap('rock', 0.7, 0); vr.pulse(i, 0.5, 40); }
+          break;
+        }
+      }
       if (on && wTouch[i] !== on && now - lastHit[i] > 250 && now > calmUntil && v > SWING.min && !blockedBy(i, on, now)) {
         lastHit[i] = now;
         session.hit(on, part, swingPower(w, v, s), i, wp.id);
@@ -902,11 +976,18 @@ function punchAhead() {
       }
     }
   }
+  if (w && w.pick && session.settings.mode === 'horror') {
+    const at = voxels.raycast(localPose.head.pos, dir, 2.3 * s);
+    const vein = at ? oreNear(at.point.addScaledVector(at.normal, -0.1), 0.35) : null;
+    if (vein) session.dig(vein, hand); else if (at) tap('rock', 0.6, 0);
+    return;
+  }
   if (s < 0.7 || !session.canBreak()) return;
   const hit = voxels.raycast(localPose.head.pos, dir, 1.7 * s);
   if (hit) { const r = 0.42 * s * MATERIALS[hit.mat].hard; session.punch(hit.point.addScaledVector(hit.normal, -r * 0.45), r); }
 }
 
+let trackLine = '';            // what the monster tracker says, if I have one
 function mmss(t) { return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; }
 
 // The small line of text that stays on screen during hide and seek and in the arena.
@@ -923,6 +1004,11 @@ function roundStatus() {
     if (st.phase === 'result') return `${n(st.w)} wins`;
     if (st.phase === 'champion') return `Champion: ${n(st.champion)}  ·  next tournament in ${st.t}`;
     return '';
+  }
+  if (session.settings.mode === 'horror') {
+    const me = session.deep.pl[session.myId];
+    if (!me) return '';
+    return `$${me[0]}  ·  Bag ${me[2]}/${me[3]}${trackLine ? '  ·  ' + trackLine : ''}`;
   }
   if (session.settings.mode === 'zombies') {
     const st = session.zombies, me = st.pl[session.myId], pts = me ? `  ·  ${me[0]} points` : '';
@@ -949,6 +1035,10 @@ function gameLines() {
     if (st.phase === 'champion') return [title, `Champion: ${n(st.champion)}`];
     if (st.a == null) return [title, `Starts in ${st.t}`];
     return [title, `${n(st.a)} vs ${n(st.b)}`, arenaLine(st)];
+  }
+  if (session.settings.mode === 'horror') {
+    const me = session.deep.pl[session.myId], names = me ? Object.keys(UPGRADES).filter((k, i) => me[1] & (1 << i)).map(k => UPGRADES[k].label).join(', ') : '';
+    return ['The Deep', me ? `$${me[0]}  ·  bag ${me[2]} of ${me[3]}` : '', names || 'Dig ore, crush it at the camp, buy better kit.'];
   }
   if (session.settings.mode === 'zombies') {
     const st = session.zombies, me = st.pl[session.myId];
@@ -1018,11 +1108,13 @@ renderer.setAnimationLoop((time, frame) => {
   const tools = mode === 'sandbox';                       // spawning and deleting are sandbox-only
   const role = session.role();
   const zomb = mode === 'zombies';
-  const hands = tools || role === 'fighter' || zomb;      // may pick things up
-  const combat = tools || (role === 'fighter' && session.arena.phase === 'fight') || zomb;
+  const deep = mode === 'horror';
+  const hands = tools || role === 'fighter' || zomb || deep;      // may pick things up
+  const combat = tools || (role === 'fighter' && session.arena.phase === 'fight') || zomb || deep;
   const waiting = role === 'giant' && session.round.phase === 'hide';   // the giant waits, blind, while they hide
   const myBody = session.body(), dead = myBody.dead;
-  if (!zomb || dead) { zNear = null; hud.hint = ''; nock = null; }
+  if (!zomb || dead) { zNear = null; nock = null; if (!deep || dead) hud.hint = ''; }
+  if (!deep || dead) cNear = null;
   const frozen = waiting || dead;
   if (dead !== wasDead) {
     wasDead = dead;
@@ -1218,15 +1310,38 @@ renderer.setAnimationLoop((time, frame) => {
     if (act.undo) session.undo();
   }
   if (playing && hands && !dead) {
+    cNear = deep && !dead && Math.hypot(loco.head.x - CAVE.camp.x, loco.head.z - CAVE.camp.z) < CAVE.camp.r + 2 ? campNear(CAVE, session.deep.pl[session.myId], localPose.hands.map(h => h.pos), localPose.head.pos, tmpV.set(0, 0, -1).applyQuaternion(localPose.head.quat)) : null;
+    if (deep) hud.hint = cNear ? `${cNear.label}${cNear.cost >= 0 ? (inVR ? '  ·  squeeze grip' : '  ·  press G') : ''}` : '';
     zNear = zomb && !dead ? within(PRIORY, session.zombies, localPose.hands.map(h => h.pos), localPose.head.pos, tmpV.set(0, 0, -1).applyQuaternion(localPose.head.quat), session.zombies.pl[session.myId]) : null;
-    hud.hint = zNear ? `${zNear.label}${zNear.what.startsWith('window:') ? (inVR ? '  ·  hold grip' : '  ·  hold G') : zNear.cost ? (inVR ? '  ·  squeeze grip' : '  ·  press G') : ''}` : '';
+    if (!deep) hud.hint = zNear ? `${zNear.label}${zNear.what.startsWith('window:') ? (inVR ? '  ·  hold grip' : '  ·  hold G') : zNear.cost ? (inVR ? '  ·  squeeze grip' : '  ·  press G') : ''}` : '';
     for (let i = 0; i < 2; i++) {
       const hp = localPose.hands[i].pos;
       if (tools && act.del[i] && session.deleteNear(hp, s) && inVR) vr.pulse(i, 0.5, 60);
       const busy = i === 1 && (carry || overItem);
       if (session.held[i] == null) stuck[i] = false;
-      else if (zomb && !stuck[i] && !act.grab[i] && heldWeapon(i)) stuck[i] = true;       // a weapon that was put in my hand (I bought it) stays there
+      else if ((zomb || deep) && !stuck[i] && !act.grab[i] && heldWeapon(i)) stuck[i] = true;       // a weapon that was put in my hand (I bought it) stays there
       if (!act.grab[i]) latch[i] = false;
+      // the Deep: a lump of ore goes in the bag when the hand holding it goes back over the shoulder
+      // (with a mouse, as soon as it is picked up); at the camp, a squeeze of grip buys, or tips the bag out
+      if (deep && !dead) {
+        const lump = session.held[i] != null ? session.props.props.get(session.held[i]) : null;
+        if (lump && lump.type.ore) {
+          const rel = tmpV.copy(hp).sub(localPose.head.pos).divideScalar(s).applyQuaternion(tmpQ.copy(localPose.head.quat).invert());
+          if (!inVR || (rel.z > -0.02 && rel.y > -0.32 && rel.y < 0.3 && Math.abs(rel.x) < 0.45)) { session.stow(i); latch[i] = true; continue; }
+        }
+        // (with a mouse there is no reaching down for a lump on the floor: the key takes the nearest one within arm's length)
+        if (!inVR && act.grabEdge[i] && session.held[i] == null) {
+          const near = session.props.nearest(localPose.head.pos, 1.5 * s, pr => !!pr.type.ore && !pr.held && !pr.heldKey);
+          if (near && session.grab(i, near.mesh.position, s)) { latch[i] = true; continue; }
+        }
+        if (cNear && cNear.cost >= 0 && act.grabEdge[i] && now - lastCamp > 400 && (!inVR || Math.hypot(hp.x - cNear.pos[0], hp.y - cNear.pos[1], hp.z - cNear.pos[2]) < 1.2) && !session.props.nearest(hp, 0.18 * s, pr => !pr.held && !pr.heldKey)) {
+          lastCamp = now;
+          session.camp(cNear.what, i);
+          latch[i] = true; lastSqueeze[i] = 0;
+          if (inVR) vr.pulse(i, 0.5, 50);
+          continue;
+        }
+      }
       // the priory: a squeeze of grip on something for sale buys it; holding grip on a broken window boards it up
       if (zNear && !dead) {
         const mine = Math.hypot(hp.x - zNear.pos[0], hp.y - zNear.pos[1], hp.z - zNear.pos[2]) < 1.1 || !inVR;
@@ -1373,6 +1488,31 @@ renderer.setAnimationLoop((time, frame) => {
   }
   blood.update(dt, GRAVITY[session.settings.gravity], bloodWorld);
   level.update(dt, (!inVR && window.game.debugCamera) || camera);
+  // the Deep: the lamp on my head; and what is out there, by ear (and by the tracker, if I have one)
+  if (deep) {
+    lamp.position.copy(localPose.head.pos);
+    lamp.target.position.copy(localPose.head.pos).add(tmpV.set(0, -0.12, -1).applyQuaternion(localPose.head.quat));
+    lamp.target.updateMatrixWorld();
+    let near = null, nd = Infinity;
+    for (const p of session.players.values()) { if (!p.z || !p.pose || session.body(p.id).dead) continue; const d = p.pose.head.pos.distanceTo(loco.head); if (d < nd) { nd = d; near = p; } }
+    dread = Math.max(0, dread - dt);
+    if (near) {
+      // its breath, its hands on the rock, and my own heart when it is close
+      if ((growlT -= dt) <= 0) { growlT = 1.6 + Math.random() * 2.6; growl(Math.min(1, 7 / (nd + 3))); }
+      if ((stepT -= dt) <= 0 && nd < 26) { stepT = dread > 0 || nd < 8 ? 0.28 : 0.55; thump(Math.min(0.9, 4 / (nd + 2))); }
+      if (nd < 9 || dread > 0) { beatT -= dt; if (beatT <= 0) { beatT = nd < 5 ? 0.36 : 0.6; heartbeat(Math.min(1, 0.5 + 3 / (nd + 1))); for (let i = 0; i < 2; i++) vr.pulse(i, 0.25, 50); } }
+    }
+    trackLine = '';
+    if (hasUp('tracker')) {
+      if (!near) trackLine = 'Tracker: nothing near';
+      else {
+        const to = tmpV.copy(near.pose.head.pos).sub(loco.head).setY(0).applyQuaternion(tmpQ.copy(localPose.head.quat).invert()), a = Math.atan2(to.x, -to.z);
+        const arrow = ['ahead', 'ahead right', 'right', 'behind right', 'behind', 'behind left', 'left', 'ahead left'][Math.round(((a + Math.PI * 2) % (Math.PI * 2)) / (Math.PI / 4)) % 8];
+        trackLine = `Tracker: ${Math.round(nd)} m ${arrow}`;
+        if ((beepT -= dt) <= 0) { beepT = Math.min(2.2, Math.max(0.16, nd / 14)); jingle([nd < 8 ? 1760 : 1320], Math.min(0.5, 2.5 / (nd + 4))); }
+      }
+    }
+  }
   // the dead moan now and then, louder the nearer they are
   if (zomb && (groanT -= dt) <= 0) {
     groanT = 1.2 + Math.random() * 2.8;
@@ -1409,5 +1549,5 @@ window.game = {
   armMenu, sky, menuAction, setSize, setPower, get carry() { return carry; }, get time() { return gameTime; },
   voxels, voxelView, world, hud, punchAhead, tryPunch, ROUND, voice, stomp, SHAKE,
   blood, fight, ripAhead, tryHoldArm, punchPower, BODY, FIGHT, RIG, handHist, ARENA, COLOSSEUM, heldWeapon, stuck, photoCount,
-  ZOMBIES, PRIORY, KINDS, TONICS, get zNear() { return zNear; },
+  ZOMBIES, PRIORY, KINDS, TONICS, get zNear() { return zNear; }, CAVE, DEEP, ORES, lamp, get cNear() { return cNear; },
 };

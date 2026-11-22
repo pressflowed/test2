@@ -711,9 +711,127 @@ function buildPriory(v) {
   }
 }
 
+// ------------------------------------------------------------------ horror: "The Deep"
+//
+// A mine. Solid rock from wall to wall, with caverns hollowed out of it and tunnels between
+// them: a lit camp by the way in (the shop and the ore crusher are there, and nothing follows
+// you into it), and the further from it you go the richer the rock and the worse the company.
+// It is all on one level (the floor rolls, but no tunnel passes over another), so that the
+// things that live there can find their way about.
+const CV_NODES = [
+  // [x, z, radius, depth]: depth 0 the camp, 1 near, 2 middle, 3 deep
+  [0, 26, 6, 0], [-14, 14, 5, 1], [14, 14, 5.5, 1], [0, 3, 7.5, 1], [-27, 15, 4, 1], [27, 13, 4, 1],
+  [-22, -4, 5, 2], [22, -2, 5, 2], [-10, -16, 6, 2], [10, -18, 6.5, 2],
+  [0, -28, 5, 3], [-26, -24, 4.5, 3], [26, -24, 4.5, 3],
+];
+const CV_LINKS = [[0, 1], [0, 2], [1, 3], [2, 3], [1, 4], [2, 5], [4, 6], [5, 7], [3, 8], [3, 9], [6, 8], [7, 9], [8, 10], [9, 10], [8, 11], [9, 12], [6, 11], [7, 12]];
+const cvNoise = (x, z) => Math.sin(x * 0.9 + z * 0.37) * 0.5 + Math.sin(x * 0.31 - z * 1.1 + 2) * 0.5;        // -1..1, bumpy
+// how far a point is from the bent line joining two caverns
+function cvTunnel(x, z, a, b, bend) {
+  const mx = (a[0] + b[0]) / 2 - (b[1] - a[1]) * bend, mz = (a[1] + b[1]) / 2 + (b[0] - a[0]) * bend;
+  let best = Infinity;
+  for (const [p, q] of [[a, [mx, mz]], [[mx, mz], b]]) {
+    const dx = q[0] - p[0], dz = q[1] - p[1], t = Math.min(1, Math.max(0, ((x - p[0]) * dx + (z - p[1]) * dz) / (dx * dx + dz * dz)));
+    best = Math.min(best, Math.hypot(x - p[0] - dx * t, z - p[1] - dz * t));
+  }
+  return best;
+}
+/** The cave's shape at a point: null in solid rock, otherwise { floor, top, depth } (metres; depth 0 to 3). */
+function cvAt(x, z) {
+  let room = 0, depth = 0, inside = false;
+  CV_NODES.forEach(([nx, nz, r, d]) => {
+    const dist = Math.hypot(x - nx, z - nz), edge = r * (1 + 0.12 * cvNoise(x, z));
+    if (dist < edge) { inside = true; const k = 1 - dist / edge; if (k > room) { room = k; depth = d; } }
+  });
+  let tunnel = false;
+  if (!inside) CV_LINKS.forEach(([i, j], n) => {
+    if (cvTunnel(x, z, CV_NODES[i], CV_NODES[j], n % 2 ? 0.12 : -0.1) < 1.5 + 0.3 * cvNoise(x * 1.7, z * 1.7)) { tunnel = true; depth = Math.max(depth, Math.min(CV_NODES[i][3], CV_NODES[j][3])); }
+  });
+  if (!inside && !tunnel) return null;
+  // the floor rolls gently; the camp is level
+  const camp = Math.hypot(x - CV_NODES[0][0], z - CV_NODES[0][1]), flat = Math.min(1, Math.max(0, (camp - 6) / 5));
+  const roll = 1 + flat * (0.9 * Math.sin(x * 0.11 + 1) * Math.cos(z * 0.09) + 0.5 * Math.sin((x + z) * 0.07));
+  const floor = Math.round(Math.max(0.5, Math.min(2.75, roll)) * 4) / 4;
+  const high = inside ? 2.6 + 4.2 * Math.sqrt(room) + 0.5 * cvNoise(x * 0.6, z * 0.6) : 2.5 + 0.45 * cvNoise(x * 0.8, z * 0.8);
+  return { floor, top: Math.round((floor + high) * 4) / 4, depth, room: inside ? room : 0 };
+}
+export const CAVE = {
+  nodes: CV_NODES.map(([x, z, r, depth]) => ({ x, z, r, depth })),
+  camp: { x: 0, z: 26, r: 6.5 },                 // nothing that hunts comes in here
+  spawn: [0, 1, 27.5], yaw: 0,
+  at: cvAt,
+  // the crusher: ore goes in (thrown into its hopper, or tipped out of your bag), money comes out
+  crusher: { pos: [4, 1.9, 29.2], hopper: [3.4, 1.6, 28.6, 4.6, 2.6, 29.8], nx: -1, nz: 0 },
+  // what the shop sells (see UPGRADES in caves.js), each on a sign along the camp's back wall
+  shops: ['pick', 'pick2', 'pick3', 'bag2', 'bag3', 'lamp2', 'tracker', 'gloves', 'hat'].map((id, i) => ({ id, pos: [-4.4 + (i % 5) * 1.15 - (i > 4 ? -0.55 : 0), i > 4 ? 2.75 : 1.85, 31.6], nx: 0, nz: -1 })),
+  lamps: [[-3.5, 28], [3.5, 26], [0, 22.5], [-2, 30.5], [2.6, 30.8]],
+};
+
+function buildCave(v) {
+  const r = rng(4242), STEP = VOXEL;
+  v.fill(-36, 0, -36, 36, 16, 36, 'rock');
+  // hollow it out, a column at a time
+  for (let k = 0; k < v.nz; k++) for (let i = 0; i < v.nx; i++) {
+    const x = v.ox + (i + 0.5) * STEP, z = v.oz + (k + 0.5) * STEP;
+    if (Math.abs(x) > 33.5 || Math.abs(z) > 33.5) continue;
+    const c = cvAt(x, z);
+    if (!c) continue;
+    v.fillVox(i, Math.round(c.floor / STEP), k, i + 1, Math.round(c.top / STEP), k + 1, 0);
+    if (c.depth === 0 || cvNoise(x * 0.5, z * 0.5) > 0.35) v.fillVox(i, Math.round(c.floor / STEP) - 1, k, i + 1, Math.round(c.floor / STEP), k + 1, MAT.dirt);     // trodden earth in places
+  }
+  // veins of ore in the walls: only rock is turned, so they lie flush and show where the wall cuts them
+  const vein = (cx, cy, cz, rad, mat) => {
+    for (let y = cy - rad; y <= cy + rad; y += STEP) for (let z = cz - rad; z <= cz + rad; z += STEP) for (let x = cx - rad; x <= cx + rad; x += STEP) {
+      if ((x - cx) ** 2 + ((y - cy) * 1.3) ** 2 + (z - cz) ** 2 > rad * rad * (0.7 + 0.5 * r())) continue;
+      if (y > 0.3 && v.matAt(x, y, z) === MAT.rock) v.fill(x, y, z, x + STEP, y + STEP, z + STEP, mat);
+    }
+  };
+  const KINDS = [[], ['copper', 'copper', 'copper', 'iron'], ['iron', 'iron', 'copper', 'gold'], ['gold', 'gold', 'crystal', 'iron']];
+  CV_NODES.forEach(([nx, nz, rad, depth], n) => {
+    if (!depth) return;
+    const count = Math.round(rad * 2.2);
+    for (let q = 0; q < count; q++) {
+      // just inside the wall, somewhere round the cavern
+      const a = r() * Math.PI * 2, d = rad * (1.04 + 0.1 * r()), x = nx + Math.cos(a) * d, z = nz + Math.sin(a) * d, c = cvAt(nx + Math.cos(a) * rad * 0.8, nz + Math.sin(a) * rad * 0.8);
+      if (!c) continue;
+      const kinds = KINDS[depth];
+      vein(x, c.floor + 0.4 + r() * 1.6, z, 0.6 + r() * 0.5, MAT[kinds[Math.floor(r() * kinds.length)]]);
+    }
+    // a few in the floor too, and (in the deep) a pillar of crystal
+    for (let q = 0; q < 3; q++) { const a = r() * 6.28, d = rad * 0.6 * r(), c = cvAt(nx + Math.cos(a) * d, nz + Math.sin(a) * d); if (c) vein(nx + Math.cos(a) * d, c.floor - 0.2, nz + Math.sin(a) * d, 0.5, MAT[KINDS[depth][Math.floor(r() * 4)]]); }
+    if (depth === 3) { const c = cvAt(nx + 1.5, nz - 1); if (c) { v.fill(nx + 1.25, c.floor, nz - 1.25, nx + 1.75, c.floor + 1.5, nz - 0.75, 'crystal'); v.fill(nx + 1.375, c.floor + 1.5, nz - 1.125, nx + 1.625, c.floor + 2.25, nz - 0.875, 'crystal'); } }
+    // rock teeth: up from the floor and down from the roof, away from the middle so the way through stays clear
+    for (let q = 0; q < Math.round(rad * 1.4); q++) {
+      const a = r() * 6.28, d = rad * (0.5 + 0.4 * r()), x = nx + Math.cos(a) * d, z = nz + Math.sin(a) * d, c = cvAt(x, z);
+      if (!c || c.room < 0.08) continue;
+      const h = 0.5 + r() * 1.25;
+      if (r() < 0.5) { v.fill(x - 0.25, c.floor, z - 0.25, x + 0.25, c.floor + h * 0.6, z + 0.25, 'rock'); v.fill(x - 0.125, c.floor + h * 0.6, z - 0.125, x + 0.125, c.floor + h, z + 0.125, 'rock'); }
+      else { v.fill(x - 0.25, c.top - h * 0.6, z - 0.25, x + 0.25, c.top, z + 0.25, 'rock'); v.fill(x - 0.125, c.top - h, z - 0.125, x + 0.125, c.top - h * 0.6, z + 0.125, 'rock'); }
+    }
+  });
+  // veins along the tunnels as well
+  CV_LINKS.forEach(([i, j], n) => {
+    const a = CV_NODES[i], b = CV_NODES[j], depth = Math.max(1, Math.min(a[3], b[3]) || 1);
+    for (const t of [0.35, 0.65]) {
+      const x = a[0] + (b[0] - a[0]) * t + (r() - 0.5) * 3, z = a[1] + (b[1] - a[1]) * t + (r() - 0.5) * 3;
+      if (!cvAt(x, z)) vein(x, 1 + r() * 1.5, z, 0.7, MAT[KINDS[depth][Math.floor(r() * 4)]]);
+    }
+  });
+  // the camp: a boarded floor, crates, lamp posts, the counter of the shop, and the crusher's bed
+  const C = CAVE.camp, F = 1;
+  v.fill(-5, F - 0.25, 28.25, 5, F, 31.75, 'plank');
+  v.fill(-5, F, 31.75, 5, F + 3.25, 32, 'plank');                                   // the board the shop's signs hang on
+  for (const [lx, lz] of CAVE.lamps) v.fill(lx - 0.125, F, lz - 0.125, lx + 0.125, F + 2, lz + 0.125, 'wood');
+  v.fill(3.25, F, 28.5, 4.75, F + 0.5, 30, 'stone');                                // the crusher stands on this
+  for (const [cx, cz, h] of [[-4.5, 24.5, 0.75], [-3.75, 24.75, 0.5], [4.8, 24.2, 0.75], [-5, 27, 0.5]]) v.fill(cx - 0.375, F, cz - 0.375, cx + 0.375, F + h, cz + 0.375, 'crate');
+  v.fill(C.x - 0.75, F, C.z - 3.6, C.x + 0.75, F + 0.25, C.z - 2.4, 'rock');          // a ring of stones for the fire
+  v.fill(C.x - 0.5, F, C.z - 3.35, C.x + 0.5, F + 0.25, C.z - 2.65, 'air');
+}
+
 export const MAPS = {
   sandbox: { label: 'Sandbox', spawn: [0, 0, 6], giantSpawn: [0, 0, 6], build: buildSandbox },
   hideseek: { label: 'Hide and seek', spawn: [0, 0, 5], giantSpawn: [0, 0, -5.5], build: buildHideSeek },
   arena: { label: 'Arena', spawn: [0, 0.25, 5], giantSpawn: [0, 0.25, 5], build: buildArena },
   zombies: { label: 'Zombies', spawn: PRIORY.spawn, giantSpawn: PRIORY.spawn, build: buildPriory },
+  horror: { label: 'Horror', spawn: CAVE.spawn, giantSpawn: CAVE.spawn, build: buildCave },
 };

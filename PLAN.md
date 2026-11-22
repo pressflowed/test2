@@ -101,4 +101,6 @@ The plan above was the starting point. What exists today, in the order it was bu
 
 10. Bots rebuilt: they move by pulling on the ground with their hands, as players do, and find their way with a navigation grid. A zombies mode on its own map: waves, points, things to buy, doors, boarded windows, tonics, power-ups, a bow.
 
+11. A horror mode: a big dark cave, a head lamp, a pickaxe that only breaks ore, a bag over the shoulder, a crusher that turns ore into money, a shop of upgrades, and monsters that roam, hear digging, chase on sight and search when they lose you.
+
 Still open from the original plan: bots that play tag or hide and seek, and a measured performance pass on Quest 2.
