@@ -84,7 +84,8 @@ const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (
     check(wandered >= 2, `bots hop about on their own (${wandered} of 3 moved)`);
     check(bots.every(b => b.head[1] > 0.3 && b.head[1] < 3), `bots stay on the ground: ${JSON.stringify(bots.map(b => +b.head[1].toFixed(2)))}`);
     check(await page.evaluate(() => game.session.playerCount === 1), 'bots do not count as players');
-    for (const id of ['b1', 'b2', 'b3']) await page.evaluate(i => game.T.still(i), id);
+    // stand them well apart and tell them to stay, so that what follows is aimed at one bot at a time
+    await page.evaluate(() => { ['b1', 'b2', 'b3'].forEach((id, i) => { const b = game.session.bots.get(id); b.place(new game.THREE.Vector3(-4 + i * 4, 0.2, 9.5), 0); game.T.still(id); }); });
     await gameWait(1.5);
     const c = await page.evaluate(() => game.session.rigs.get('b1').head.toArray());
     console.log('     draw calls:', calls0, 'alone,', await page.evaluate(() => game.renderer.info.render.calls), 'with 3 bots');
