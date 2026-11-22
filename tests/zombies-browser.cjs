@@ -314,8 +314,8 @@ const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (
     await gameWait(0.6);
     await shot('zombies-18-spikes.png', [4.5, 2.2, -11.5], [0, 0.4, -17], 60);
 
-    // ---- what they leave behind
-    await page.evaluate(() => { const S = game.session, at = game.loco.head; for (let i = 0; i < 3; i++) S._zSpawn('walker', -9.5 + i * 2, -14);       // (clear of the spikes, which are still up) S.horde.state.drops.push({ k: 501, kind: 'fire', x: at.x + 3, z: at.z, t: 20 }); game.fx.length = 0; game.before = { n: game.T.zombies().length, pts: S.zombies.pl.h[0] }; });
+    // ---- what they leave behind (these three come up clear of the spikes, which are still out)
+    await page.evaluate(() => { const S = game.session, at = game.loco.head; for (let i = 0; i < 3; i++) S._zSpawn('walker', -9.5 + i * 2, -14); S.horde.state.drops.push({ k: 501, kind: 'fire', x: at.x + 3, z: at.z, t: 20 }); game.fx.length = 0; game.before = { n: game.T.zombies().length, pts: S.zombies.pl.h[0] }; });
     await frames(6);
     r = await page.evaluate(() => ({ shown: game.level.priory.group.children.some(c => c.userData && c.userData.gem), n: game.session.zombies.drops.length }));
     check(r.n === 1 && r.shown, 'something glowing is left on the ground');

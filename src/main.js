@@ -82,7 +82,7 @@ const loco = new Locomotion(world, saved.bodyHeight ? { bodyHeight: saved.bodyHe
 
 const desktop = new DesktopInput(canvas);
 const vr = new VRInput(renderer, rig);
-desktop.onRespawn = respawn;
+desktop.onRespawn = () => { if (session.role() === 'free') respawn(); };       // (R takes you back to the start, but not out of a round or a fight)
 
 const me = { name: saved.name || randomName(), color: saved.color ?? SKIN };
 const avatarTemplate = Avatar.loadTemplate('assets/body-rig.glb');
@@ -736,7 +736,7 @@ function heldWeapon(i) {
 
 // My hands against other bodies: a fast hand (or weapon) landing on someone hurts them.
 // the priory: what is in reach to buy or mend; and the bow
-let zNear = null, lastBuy = 0, lastMend = 0, lastShot = 0;
+let zNear = null, lastBuy = 0, lastMend = 0, lastShot = 0, groanT = 2;
 let nock = null;                 // { hand, pull (0..1) } while my other hand has the bowstring
 const nockArrow = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.72, 5).rotateX(Math.PI / 2), new THREE.MeshLambertMaterial({ color: 0x7a5230 }));
 nockArrow.visible = false;
@@ -1373,6 +1373,12 @@ renderer.setAnimationLoop((time, frame) => {
   }
   blood.update(dt, GRAVITY[session.settings.gravity], bloodWorld);
   level.update(dt, (!inVR && window.game.debugCamera) || camera);
+  // the dead moan now and then, louder the nearer they are
+  if (zomb && (groanT -= dt) <= 0) {
+    groanT = 1.2 + Math.random() * 2.8;
+    const near = [...session.players.values()].filter(p => p.z && p.pose && !session.body(p.id).dead && p.pose.head.pos.distanceTo(loco.head) < 14);
+    if (near.length) { const p = near[Math.floor(Math.random() * near.length)]; groan(Math.min(0.8, 3 / (p.pose.head.pos.distanceTo(loco.head) + 2)), p.z === 'brute' ? 1 : 0); }
+  }
   // the arrow on the string, while I am drawing the bow
   nockArrow.visible = !!nock && !!heldWeapon(1 - (nock ? nock.hand : 0));
   if (nockArrow.visible) {
